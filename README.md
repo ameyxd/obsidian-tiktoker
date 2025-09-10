@@ -1,94 +1,116 @@
-# Obsidian Sample Plugin
+# TikToker - Obsidian Plugin
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+Save TikTok videos as markdown notes with embedded content and metadata extraction.
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+## Features
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open Sample Modal" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+### Current Version (1.0.0)
 
-## First time developing plugins?
+- **One-click TikTok saving**: Process TikTok URLs directly from your clipboard
+- **Embedded video playback**: View TikTok videos directly within Obsidian notes
+- **Metadata extraction**: Automatically fetches video title, author, description, and hashtags
+- **Smart file naming**: Customizable file naming patterns with template variables
+- **Duplicate handling**: Intelligent duplicate detection with user prompts
+- **Hashtag integration**: Automatically adds hashtags to note content and properties
+- **Properties support**: Adds structured metadata to note frontmatter
+- **Flexible templates**: Customize note titles and content layout
 
-Quick starting guide for new plugin devs:
+### Template Variables
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+The plugin supports the following template variables:
+- `{{date}}` - Current date (YYYY-MM-DD format)
+- `{{author}}` - TikTok author username
+- `{{description}}` - Video description/title
+- `{{videoid}}` - TikTok video ID
+- `{{hashtags}}` - Extracted hashtags
 
-## Releasing new releases
+### Default Settings
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+- **Output folder**: Root vault directory
+- **File naming**: `{{date}}-{{author}}-{{videoid}}`
+- **Note title**: `TikTok by {{author}} on {{description}}`
+- **Auto-tagging**: Adds `tiktoker` tag to all created notes
+- **Properties**: Includes source URL and metadata in frontmatter
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+## Usage
 
-## Adding your plugin to the community plugin list
+1. Copy a TikTok URL to your clipboard
+2. Use the command palette (`Cmd/Ctrl + P`) and search for "Process TikTok from Clipboard"
+3. The plugin will:
+   - Fetch video metadata from TikTok's API
+   - Create a new markdown note with embedded video
+   - Add relevant tags and properties
+   - Handle duplicates intelligently
 
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
+### Supported URL Formats
 
-## How to use
+- `https://www.tiktok.com/@username/video/1234567890123456789`
+- `https://tiktok.com/@username/video/1234567890123456789`
+- `https://vm.tiktok.com/shortcode/` (short URLs)
+- `https://www.tiktok.com/t/shortcode/` (alternative short URLs)
 
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
+## Installation
 
-## Manually installing the plugin
+### From Community Plugins (Recommended)
+1. Open Obsidian Settings
+2. Go to Community Plugins
+3. Browse and search for "TikToker"
+4. Click Install and Enable
 
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
+### Manual Installation
+1. Download the latest release files (`main.js`, `manifest.json`, `styles.css`)
+2. Create a folder `obsidian-tiktoker` in your vault's `.obsidian/plugins/` directory
+3. Copy the downloaded files into this folder
+4. Reload Obsidian and enable the plugin in settings
 
-## Improve code quality with eslint (optional)
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- To use eslint with this project, make sure to install eslint from terminal:
-  - `npm install -g eslint`
-- To use eslint to analyze this project use this command:
-  - `eslint main.ts`
-  - eslint will then create a report with suggestions for code improvement by file and line number.
-- If your source code is in a folder, such as `src`, you can use eslint with this command to analyze all files in that folder:
-  - `eslint ./src/`
+## Configuration
 
-## Funding URL
+Access plugin settings through Settings → Community Plugins → TikToker:
 
-You can include funding URLs where people who use your plugin can financially support it.
+- **Output Folder**: Choose where TikTok notes are saved
+- **File Naming Pattern**: Customize filename format using template variables
+- **Note Title Template**: Set how note titles appear
+- **Note Content Template**: Customize the note body structure
+- **Include Hashtags**: Toggle hashtag extraction in content
+- **Enable Properties**: Add structured metadata to frontmatter
+- **Source Property**: Include original TikTok URL in properties
 
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
+## Roadmap
 
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
+### Coming in Future Versions
+
+- **Audio Transcription**: Automatic speech-to-text transcription of TikTok audio
+- **Batch Processing**: Process multiple TikTok URLs at once
+- **Advanced Templates**: More customization options for note formatting
+- **Thumbnail Extraction**: Save video thumbnails as attachments
+- **Offline Mode**: Cache video metadata for offline access
+- **Integration Features**: Connect with other Obsidian plugins (Calendar, Tags, etc.)
+
+## Support
+
+If you find this plugin helpful, consider supporting its development:
+
+[![Buy Me A Coffee](https://img.shields.io/badge/buy%20me%20a%20coffee-donate-yellow.svg)](https://buymeacoffee.com/ameyxd)
+[![GitHub Sponsor](https://img.shields.io/badge/sponsor-GitHub-red.svg)](https://github.com/sponsors/ameyxd)
+
+- **Issues**: Report bugs and feature requests on [GitHub Issues](https://github.com/ameyxd/obsidian-tiktoker/issues)
+- **Discussions**: Join conversations on [GitHub Discussions](https://github.com/ameyxd/obsidian-tiktoker/discussions)
+
+## Development
+
+Built with TypeScript and the Obsidian Plugin API.
+
+### Building from Source
+
+```bash
+npm install
+npm run build
 ```
 
-If you have multiple URLs, you can also do:
+## License
 
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
-```
+MIT License - see LICENSE file for details.
 
-## API Documentation
+## Author
 
-See https://github.com/obsidianmd/obsidian-api
+Created by [ameyxd](https://github.com/ameyxd)
