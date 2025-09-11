@@ -356,14 +356,16 @@ export default class TikTokerPlugin extends Plugin {
 
 	private async extractTikTokPostedDate(url: string, videoId: string | null): Promise<string> {
 		try {
-			// TikTok video IDs are usually 19-digit numbers that contain timestamp info
+			// TikTok video IDs are 64-bit numbers that contain timestamp info in the upper 32 bits
 			if (videoId && videoId.length >= 19) {
-				// The first part of TikTok video ID often contains timestamp (Unix time in milliseconds)
-				// Extract the first 10 digits and convert from timestamp
-				const timestampStr = videoId.substring(0, 10);
-				const timestamp = parseInt(timestampStr);
+				// Convert the video ID to a number and extract timestamp using bit manipulation
+				// Right-shift by 32 bits to get the timestamp from the upper 32 bits
+				const videoIdBig = BigInt(videoId);
+				const shifted = videoIdBig >> BigInt(32); // Right shift 32 bits using BigInt constructor
+				const timestamp = Number(shifted);
 				
-				if (timestamp > 1000000000 && timestamp < 9999999999) { // Reasonable timestamp range
+				// Validate timestamp is in reasonable Unix timestamp range (2010-2030)
+				if (timestamp > 1262304000 && timestamp < 1893456000) { // Jan 1 2010 - Jan 1 2030
 					const date = new Date(timestamp * 1000);
 					return date.toISOString().split('T')[0];
 				}
