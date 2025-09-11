@@ -140,6 +140,13 @@ export default class TikTokerPlugin extends Plugin {
 		const videoId = this.extractVideoId(url);
 		console.log('TikToker Debug - Video ID extracted:', videoId);
 		
+		// Check if this is a slideshow URL (contains /photo/)
+		const isSlideshow = url.includes('/photo/');
+		if (isSlideshow) {
+			console.log('TikToker Debug - Detected slideshow URL:', url);
+			return await this.handleSlideshowUrl(url, videoId, isBulkProcessing);
+		}
+		
 		try {
 			const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`;
 			console.log('TikToker Debug - Attempting oEmbed:', oembedUrl);
@@ -214,6 +221,28 @@ export default class TikTokerPlugin extends Plugin {
 				isSlideshow: slideshowData.isSlideshow
 			};
 		}
+	}
+
+	private async handleSlideshowUrl(url: string, videoId: string | null, isBulkProcessing: boolean): Promise<any> {
+		console.log('TikToker Debug - Processing slideshow URL');
+		
+		// Try to get slideshow data
+		const slideshowData = await this.detectAndHandleSlideshow(url, videoId);
+		const postedDate = await this.extractTikTokPostedDate(url, videoId);
+		
+		return {
+			author: this.extractAuthorFromUrl(url),
+			description: slideshowData.description || 'TikTok Slideshow',
+			hashtags: slideshowData.hashtags || [],
+			url: url,
+			expandedUrl: url,
+			embedHtml: slideshowData.embedHtml || this.generateSlideshowEmbed(url, videoId, slideshowData.description),
+			videoId: videoId,
+			createdDate: new Date().toISOString().split('T')[0],
+			postedDate: postedDate,
+			oembedFailed: false, // We're handling this directly
+			isSlideshow: true
+		};
 	}
 
 	private async detectAndHandleSlideshow(url: string, videoId: string | null): Promise<{
@@ -554,10 +583,22 @@ export default class TikTokerPlugin extends Plugin {
 
 		const embedHtml = data.embedHtml || 'TikTok video embed not available';
 		const hashtags = data.hashtags ? [...data.hashtags, '#tiktoker'].join(' ') : '#tiktoker';
+		
+		// Clean description by removing hashtags if they exist in the hashtags array
+		let cleanDescription = data.description || '';
+		if (data.hashtags && data.hashtags.length > 0) {
+			// Remove hashtags from description
+			data.hashtags.forEach((hashtag: string) => {
+				const hashtagRegex = new RegExp(hashtag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+				cleanDescription = cleanDescription.replace(hashtagRegex, '').trim();
+			});
+			// Clean up extra spaces and trim
+			cleanDescription = cleanDescription.replace(/\s+/g, ' ').trim();
+		}
 
 		return content + this.settings.noteContentTemplate
 			.replace(/{{iframe}}/g, embedHtml)
-			.replace(/{{description}}/g, data.description || '')
+			.replace(/{{description}}/g, cleanDescription)
 			.replace(/{{hashtags}}/g, hashtags)
 			.replace(/{{transcription}}/g, '');
 	}
@@ -1220,21 +1261,21 @@ class BulkResultsModal extends Modal {
 				const content = duplicateItem.createDiv();
 				content.style.flex = '1';
 				content.style.minWidth = '0'; // Allow text to wrap
-				content.style.maxWidth = '60%'; // Limit content width
+				content.style.marginRight = '12px'; // Space from buttons
 				
 				const titleDiv = content.createEl('div', {text: `${item.noteTitle || item.fileName}`});
 				titleDiv.style.wordWrap = 'break-word';
-				titleDiv.style.wordBreak = 'break-word';
 				titleDiv.style.marginBottom = '4px';
+				titleDiv.style.fontWeight = 'normal';
 				
 				const urlDiv = content.createEl('div', {
 					text: item.url,
 					cls: 'duplicate-url'
 				});
 				urlDiv.style.fontSize = '0.8em';
-				urlDiv.style.wordWrap = 'break-word';
-				urlDiv.style.wordBreak = 'break-all';
+				urlDiv.style.wordBreak = 'break-all'; // Only break URLs aggressively
 				urlDiv.style.opacity = '0.7';
+				urlDiv.style.lineHeight = '1.2';
 				
 				const buttonContainer = duplicateItem.createDiv();
 				buttonContainer.style.display = 'flex';
