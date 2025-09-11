@@ -41,7 +41,7 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	handlePrivateVideos: 'create-empty',
 	duplicateFileHandling: 'replace',
 	urlTimeout: 10,
-	noteTitleTemplate: 'TikTok by {{author}} on {{description}}',
+	noteTitleTemplate: '{{date}} Tiktok on {{description}} by {{author}}',
 	noteContentTemplate: '{{iframe}}\n\n## Description\n{{description}}\n\n## Hashtags\n{{hashtags}}\n\n{{transcription}}',
 	enableBulkProcessing: true,
 	bypassModalForSingle: true,
@@ -129,7 +129,7 @@ export default class TikTokerPlugin extends Plugin {
 			new Notice('Fetching TikTok data...');
 			
 			const tikTokData = await this.fetchTikTokData(expandedUrl);
-			await this.createTikTokNote(tikTokData);
+			await this.createTikTokNote(tikTokData, false);
 		} catch (error) {
 			new Notice('Failed to process TikTok URL');
 			console.error('TikToker URL processing error:', error);
@@ -267,7 +267,7 @@ export default class TikTokerPlugin extends Plugin {
 		return videoIdMatch ? videoIdMatch[1] : null;
 	}
 
-	private async createTikTokNote(data: any) {
+	private async createTikTokNote(data: any, isBulkProcessing: boolean = false): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string}> {
 		const fileName = this.generateFileName(data);
 		const noteTitle = this.generateNoteTitle(data);
 		const noteContent = this.generateNoteContent(data);
@@ -281,19 +281,25 @@ export default class TikTokerPlugin extends Plugin {
 		const existingFile = this.app.vault.getAbstractFileByPath(filePath);
 		
 		if (existingFile) {
-			const action = await this.handleDuplicateFile(fileName, noteTitle);
-			
-			if (action === 'skip') {
-				new Notice('File creation skipped');
-				return;
-			} else if (action === 'duplicate') {
-				let counter = 1;
-				let newFileName = fileName;
-				do {
-					newFileName = `${fileName}-${counter}`;
-					filePath = folderPath ? `${folderPath}/${newFileName}.md` : `${newFileName}.md`;
-					counter++;
-				} while (this.app.vault.getAbstractFileByPath(filePath));
+			if (isBulkProcessing) {
+				// For bulk processing, return duplicate info instead of showing modal
+				return { success: false, duplicate: true, fileName, noteTitle };
+			} else {
+				// Single processing - show modal as before
+				const action = await this.handleDuplicateFile(fileName, noteTitle);
+				
+				if (action === 'skip') {
+					new Notice('File creation skipped');
+					return { success: false };
+				} else if (action === 'duplicate') {
+					let counter = 1;
+					let newFileName = fileName;
+					do {
+						newFileName = `${fileName}-${counter}`;
+						filePath = folderPath ? `${folderPath}/${newFileName}.md` : `${newFileName}.md`;
+						counter++;
+					} while (this.app.vault.getAbstractFileByPath(filePath));
+				}
 			}
 		}
 		
@@ -301,14 +307,16 @@ export default class TikTokerPlugin extends Plugin {
 			if (existingFile && filePath === (folderPath ? `${folderPath}/${fileName}.md` : `${fileName}.md`)) {
 				await this.app.vault.delete(existingFile);
 				await this.app.vault.create(filePath, noteContent);
-				new Notice(`Replaced: ${noteTitle}`);
+				if (!isBulkProcessing) new Notice(`Replaced: ${noteTitle}`);
 			} else {
 				await this.app.vault.create(filePath, noteContent);
-				new Notice(`Created: ${noteTitle}`);
+				if (!isBulkProcessing) new Notice(`Created: ${noteTitle}`);
 			}
+			return { success: true, fileName, noteTitle };
 		} catch (error) {
-			new Notice('Failed to create note');
+			if (!isBulkProcessing) new Notice('Failed to create note');
 			console.error('Note creation error:', error);
+			return { success: false };
 		}
 	}
 
@@ -332,6 +340,7 @@ export default class TikTokerPlugin extends Plugin {
 
 	private generateNoteTitle(data: any): string {
 		return this.settings.noteTitleTemplate
+			.replace(/{{date}}/g, data.date || new Date().toISOString().split('T')[0])
 			.replace(/{{description}}/g, data.description || 'Unknown')
 			.replace(/{{author}}/g, data.author || 'Unknown');
 	}
@@ -380,7 +389,7 @@ export default class TikTokerPlugin extends Plugin {
 			modal.open();
 		}
 
-		const results: { url: string; success: boolean; error?: string }[] = [];
+		const results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string }[] = [];
 		const processingQueue = [...urls];
 		let processed = 0;
 
@@ -394,12 +403,20 @@ export default class TikTokerPlugin extends Plugin {
 					setTimeout(() => reject(new Error('Processing timeout')), (this.settings.urlTimeout + 5) * 1000)
 				);
 
-				await Promise.race([
-					this.processTikTokUrl(url),
-					timeoutPromise
-				]);
+				const processUrlPromise = this.processTikTokUrlBulk(url);
 
-				results.push({ url, success: true });
+				const result = await Promise.race([
+					processUrlPromise,
+					timeoutPromise
+				]) as {success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string};
+
+				results.push({ 
+					url, 
+					success: result.success,
+					duplicate: result.duplicate,
+					fileName: result.fileName,
+					noteTitle: result.noteTitle
+				});
 				processed++;
 				
 			} catch (error) {
@@ -418,20 +435,38 @@ export default class TikTokerPlugin extends Plugin {
 		this.showBulkProcessingResults(results);
 	}
 
-	private showBulkProcessingResults(results: { url: string; success: boolean; error?: string }[]) {
-		const successful = results.filter(r => r.success);
-		const failed = results.filter(r => !r.success);
+	private async processTikTokUrlBulk(url: string): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string}> {
+		try {
+			const expandedUrl = await this.expandUrl(url);
+			const tikTokData = await this.fetchTikTokData(expandedUrl);
+			return await this.createTikTokNote(tikTokData, true);
+		} catch (error) {
+			throw error;
+		}
+	}
 
-		if (failed.length > 0) {
-			const modal = new BulkResultsModal(this.app, successful, failed, (failedUrls) => {
+	private showBulkProcessingResults(results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string }[]) {
+		const successful = results.filter(r => r.success);
+		const failed = results.filter(r => !r.success && !r.duplicate);
+		const duplicates = results.filter(r => r.duplicate);
+
+		// Show single summary notice instead of multiple toasts
+		const summaryParts = [];
+		if (successful.length > 0) summaryParts.push(`✅ Created: ${successful.length}`);
+		if (duplicates.length > 0) summaryParts.push(`⚠️ Duplicates: ${duplicates.length}`);
+		if (failed.length > 0) summaryParts.push(`❌ Failed: ${failed.length}`);
+		
+		new Notice(summaryParts.join(' • '));
+
+		// Show detailed modal if there are duplicates or failures
+		if (duplicates.length > 0 || failed.length > 0) {
+			const modal = new BulkResultsModal(this.app, successful, failed, duplicates, (failedUrls) => {
 				// Add a delay before retrying
 				setTimeout(() => {
 					this.processBulkTikToks(failedUrls);
 				}, 2000); // 2 second delay
 			});
 			modal.open();
-		} else {
-			new Notice(`Successfully processed ${successful.length} TikTok URLs`);
 		}
 	}
 
@@ -832,12 +867,14 @@ class BulkProgressModal extends Modal {
 class BulkResultsModal extends Modal {
 	successful: { url: string; success: boolean }[];
 	failed: { url: string; success: boolean; error?: string }[];
+	duplicates: { url: string; duplicate: boolean; fileName?: string; noteTitle?: string }[];
 	onRetry: (failedUrls: string[]) => void;
 
-	constructor(app: App, successful: any[], failed: any[], onRetry: (failedUrls: string[]) => void) {
+	constructor(app: App, successful: any[], failed: any[], duplicates: any[], onRetry: (failedUrls: string[]) => void) {
 		super(app);
 		this.successful = successful;
 		this.failed = failed;
+		this.duplicates = duplicates;
 		this.onRetry = onRetry;
 	}
 
@@ -851,7 +888,35 @@ class BulkResultsModal extends Modal {
 		const summary = contentEl.createDiv({cls: 'results-summary'});
 		summary.style.marginBottom = '20px';
 		summary.createEl('p', {text: `✅ Successfully processed: ${this.successful.length}`});
+		if (this.duplicates.length > 0) {
+			summary.createEl('p', {text: `⚠️ Duplicate files skipped: ${this.duplicates.length}`});
+		}
 		summary.createEl('p', {text: `❌ Failed to process: ${this.failed.length}`});
+
+		// Show duplicates section
+		if (this.duplicates.length > 0) {
+			contentEl.createEl('h3', {text: 'Duplicate Files:'});
+			
+			const duplicatesContainer = contentEl.createDiv({cls: 'duplicate-urls'});
+			duplicatesContainer.style.maxHeight = '200px';
+			duplicatesContainer.style.overflowY = 'auto';
+			duplicatesContainer.style.border = '1px solid var(--background-modifier-border)';
+			duplicatesContainer.style.padding = '10px';
+			duplicatesContainer.style.marginBottom = '15px';
+			duplicatesContainer.style.backgroundColor = 'var(--background-secondary)';
+
+			this.duplicates.forEach(item => {
+				const duplicateItem = duplicatesContainer.createDiv({cls: 'duplicate-item'});
+				duplicateItem.style.marginBottom = '8px';
+				
+				duplicateItem.createEl('div', {text: `${item.noteTitle || item.fileName}`});
+				duplicateItem.createEl('div', {
+					text: item.url,
+					cls: 'duplicate-url'
+				}).style.fontSize = '0.8em';
+				duplicateItem.style.opacity = '0.8';
+			});
+		}
 
 		if (this.failed.length > 0) {
 			contentEl.createEl('h3', {text: 'Failed URLs:'});
