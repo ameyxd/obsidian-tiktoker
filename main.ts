@@ -19,6 +19,9 @@ interface TikTokerSettings {
 	urlTimeout: number;
 	noteTitleTemplate: string;
 	noteContentTemplate: string;
+	enableBulkProcessing: boolean;
+	bypassModalForSingle: boolean;
+	showBulkProcessingProgress: boolean;
 }
 
 const DEFAULT_SETTINGS: TikTokerSettings = {
@@ -39,7 +42,10 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	duplicateFileHandling: 'replace',
 	urlTimeout: 10,
 	noteTitleTemplate: 'TikTok by {{author}} on {{description}}',
-	noteContentTemplate: '{{iframe}}\n\n## Description\n{{description}}\n\n## Hashtags\n{{hashtags}}\n\n{{transcription}}'
+	noteContentTemplate: '{{iframe}}\n\n## Description\n{{description}}\n\n## Hashtags\n{{hashtags}}\n\n{{transcription}}',
+	enableBulkProcessing: true,
+	bypassModalForSingle: true,
+	showBulkProcessingProgress: true
 }
 
 export default class TikTokerPlugin extends Plugin {
@@ -66,13 +72,24 @@ export default class TikTokerPlugin extends Plugin {
 	async processTikTokFromClipboard() {
 		try {
 			const clipboardText = await navigator.clipboard.readText();
-			if (!this.isTikTokUrl(clipboardText)) {
-				new Notice('Clipboard does not contain a valid TikTok URL');
+			const tikTokUrls = this.extractTikTokUrls(clipboardText);
+			
+			if (tikTokUrls.length === 0) {
+				new Notice('Clipboard does not contain any valid TikTok URLs');
 				return;
 			}
 
-			new Notice('Processing TikTok URL...');
-			await this.processTikTokUrl(clipboardText.trim());
+			if (this.shouldShowBulkModal(tikTokUrls)) {
+				// Show bulk processing modal
+				const modal = new BulkProcessingModal(this.app, tikTokUrls, (selectedUrls) => {
+					this.processBulkTikToks(selectedUrls);
+				});
+				modal.open();
+			} else {
+				// Process single URL (existing behavior)
+				new Notice('Processing TikTok URL...');
+				await this.processTikTokUrl(tikTokUrls[0]);
+			}
 		} catch (error) {
 			new Notice('Failed to read clipboard or process TikTok URL');
 			console.error('TikToker error:', error);
@@ -86,6 +103,24 @@ export default class TikTokerPlugin extends Plugin {
 			/^https?:\/\/(www\.)?tiktok\.com\/@[\w.-]+\/video\/\d+/
 		];
 		return tikTokPatterns.some(pattern => pattern.test(url.trim()));
+	}
+
+	private extractTikTokUrls(text: string): string[] {
+		// Extract URLs using multiple methods to handle different formats
+		const urlPattern = /https?:\/\/(?:www\.)?(tiktok\.com|vm\.tiktok\.com)\/[^\s\]\)\"\'<>]+/gi;
+		const matches = text.match(urlPattern) || [];
+		
+		// Deduplicate URLs
+		const uniqueUrls = [...new Set(matches)];
+		
+		// Filter to ensure they're valid TikTok URLs
+		return uniqueUrls.filter(url => this.isTikTokUrl(url));
+	}
+
+	private shouldShowBulkModal(urls: string[]): boolean {
+		if (!this.settings.enableBulkProcessing) return false;
+		if (urls.length <= 1 && this.settings.bypassModalForSingle) return false;
+		return urls.length > 1;
 	}
 
 	private async processTikTokUrl(url: string) {
@@ -337,6 +372,68 @@ export default class TikTokerPlugin extends Plugin {
 			.replace(/{{transcription}}/g, '');
 	}
 
+	private async processBulkTikToks(urls: string[]) {
+		if (urls.length === 0) return;
+
+		const modal = new BulkProgressModal(this.app, urls.length);
+		if (this.settings.showBulkProcessingProgress) {
+			modal.open();
+		}
+
+		const results: { url: string; success: boolean; error?: string }[] = [];
+		const processingQueue = [...urls];
+		let processed = 0;
+
+		while (processingQueue.length > 0) {
+			const url = processingQueue.shift()!;
+			modal.updateProgress(processed + 1, `Processing: ${url}`);
+
+			try {
+				// Add timeout for individual URL processing
+				const timeoutPromise = new Promise((_, reject) => 
+					setTimeout(() => reject(new Error('Processing timeout')), (this.settings.urlTimeout + 5) * 1000)
+				);
+
+				await Promise.race([
+					this.processTikTokUrl(url),
+					timeoutPromise
+				]);
+
+				results.push({ url, success: true });
+				processed++;
+				
+			} catch (error) {
+				console.error(`Failed to process URL ${url}:`, error);
+				// Push to back of queue if timeout, otherwise mark as failed
+				if (error.message === 'Processing timeout' && processingQueue.length < urls.length * 2) {
+					processingQueue.push(url);
+				} else {
+					results.push({ url, success: false, error: error.message });
+					processed++;
+				}
+			}
+		}
+
+		modal.close();
+		this.showBulkProcessingResults(results);
+	}
+
+	private showBulkProcessingResults(results: { url: string; success: boolean; error?: string }[]) {
+		const successful = results.filter(r => r.success);
+		const failed = results.filter(r => !r.success);
+
+		if (failed.length > 0) {
+			const modal = new BulkResultsModal(this.app, successful, failed, (failedUrls) => {
+				// Add a delay before retrying
+				setTimeout(() => {
+					this.processBulkTikToks(failedUrls);
+				}, 2000); // 2 second delay
+			});
+			modal.open();
+		} else {
+			new Notice(`Successfully processed ${successful.length} TikTok URLs`);
+		}
+	}
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -481,6 +578,44 @@ class TikTokerSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		// Bulk Processing Section
+		containerEl.createEl('h3', {text: 'Bulk Processing'});
+
+		new Setting(containerEl)
+			.setName('Enable Bulk Processing')
+			.setDesc('Allow processing multiple TikTok URLs at once when detected in clipboard')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enableBulkProcessing)
+				.onChange(async (value) => {
+					this.plugin.settings.enableBulkProcessing = value;
+					await this.plugin.saveSettings();
+					this.display(); // Refresh to show/hide dependent settings
+				}));
+
+		if (this.plugin.settings.enableBulkProcessing) {
+			new Setting(containerEl)
+				.setName('Bypass Modal for Single URL')
+				.setDesc('Skip the bulk processing modal when only one TikTok URL is detected')
+				.addToggle(toggle => toggle
+					.setValue(this.plugin.settings.bypassModalForSingle)
+					.onChange(async (value) => {
+						this.plugin.settings.bypassModalForSingle = value;
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(containerEl)
+				.setName('Show Progress During Bulk Processing')
+				.setDesc('Display progress modal while processing multiple URLs')
+				.addToggle(toggle => toggle
+					.setValue(this.plugin.settings.showBulkProcessingProgress)
+					.onChange(async (value) => {
+						this.plugin.settings.showBulkProcessingProgress = value;
+						await this.plugin.saveSettings();
+					}));
+		}
+
+		containerEl.createEl('h3', {text: 'Advanced'});
+
 		new Setting(containerEl)
 			.setName('URL Timeout (seconds)')
 			.setDesc('Timeout for URL requests')
@@ -538,6 +673,227 @@ class DuplicateFileModal extends Modal {
 			this.onSubmit('skip');
 			this.close();
 		};
+	}
+
+	onClose() {
+		const {contentEl} = this;
+		contentEl.empty();
+	}
+}
+
+class BulkProcessingModal extends Modal {
+	urls: string[];
+	onSubmit: (selectedUrls: string[]) => void;
+	checkboxes: HTMLInputElement[] = [];
+
+	constructor(app: App, urls: string[], onSubmit: (selectedUrls: string[]) => void) {
+		super(app);
+		this.urls = urls;
+		this.onSubmit = onSubmit;
+	}
+
+	onOpen() {
+		const {contentEl} = this;
+		contentEl.empty();
+
+		contentEl.createEl('h2', {text: `Found ${this.urls.length} TikTok URLs`});
+		contentEl.createEl('p', {text: 'Select which URLs you want to process:'});
+
+		// Select All / Deselect All buttons
+		const buttonContainer = contentEl.createDiv({cls: 'bulk-select-buttons'});
+		buttonContainer.style.marginBottom = '15px';
+		buttonContainer.style.display = 'flex';
+		buttonContainer.style.gap = '10px';
+
+		const selectAllBtn = buttonContainer.createEl('button', {text: 'Select All'});
+		selectAllBtn.onclick = () => {
+			this.checkboxes.forEach(cb => cb.checked = true);
+		};
+
+		const deselectAllBtn = buttonContainer.createEl('button', {text: 'Deselect All'});
+		deselectAllBtn.onclick = () => {
+			this.checkboxes.forEach(cb => cb.checked = false);
+		};
+
+		// URL list with checkboxes
+		const urlContainer = contentEl.createDiv({cls: 'bulk-url-list'});
+		urlContainer.style.maxHeight = '400px';
+		urlContainer.style.overflowY = 'auto';
+		urlContainer.style.border = '1px solid var(--background-modifier-border)';
+		urlContainer.style.padding = '10px';
+		urlContainer.style.marginBottom = '15px';
+
+		this.urls.forEach(url => {
+			const urlItem = urlContainer.createDiv({cls: 'bulk-url-item'});
+			urlItem.style.marginBottom = '8px';
+			urlItem.style.display = 'flex';
+			urlItem.style.alignItems = 'center';
+
+			const checkbox = urlItem.createEl('input', {type: 'checkbox'});
+			checkbox.checked = true; // Default to checked
+			checkbox.style.marginRight = '10px';
+			this.checkboxes.push(checkbox);
+
+			const urlText = urlItem.createSpan({text: url});
+			urlText.style.fontSize = '0.9em';
+			urlText.style.wordBreak = 'break-all';
+		});
+
+		// Action buttons
+		const actionContainer = contentEl.createDiv({cls: 'modal-button-container'});
+		actionContainer.style.display = 'flex';
+		actionContainer.style.gap = '10px';
+		actionContainer.style.marginTop = '20px';
+
+		const processBtn = actionContainer.createEl('button', {text: 'Process Selected', cls: 'mod-cta'});
+		processBtn.onclick = () => {
+			const selectedUrls = this.urls.filter((_, index) => this.checkboxes[index].checked);
+			if (selectedUrls.length === 0) {
+				new Notice('Please select at least one URL to process');
+				return;
+			}
+			this.onSubmit(selectedUrls);
+			this.close();
+		};
+
+		const cancelBtn = actionContainer.createEl('button', {text: 'Cancel'});
+		cancelBtn.onclick = () => this.close();
+	}
+
+	onClose() {
+		const {contentEl} = this;
+		contentEl.empty();
+	}
+}
+
+class BulkProgressModal extends Modal {
+	total: number;
+	current: number = 0;
+	progressBar: HTMLDivElement;
+	statusText: HTMLParagraphElement;
+
+	constructor(app: App, total: number) {
+		super(app);
+		this.total = total;
+	}
+
+	onOpen() {
+		const {contentEl} = this;
+		contentEl.empty();
+
+		contentEl.createEl('h2', {text: 'Processing TikTok URLs'});
+		
+		this.statusText = contentEl.createEl('p', {text: 'Starting...'});
+		
+		const progressContainer = contentEl.createDiv({cls: 'progress-container'});
+		progressContainer.style.width = '100%';
+		progressContainer.style.height = '20px';
+		progressContainer.style.backgroundColor = 'var(--background-modifier-border)';
+		progressContainer.style.borderRadius = '10px';
+		progressContainer.style.overflow = 'hidden';
+		progressContainer.style.margin = '15px 0';
+
+		this.progressBar = progressContainer.createDiv({cls: 'progress-bar'});
+		this.progressBar.style.height = '100%';
+		this.progressBar.style.backgroundColor = 'var(--interactive-accent)';
+		this.progressBar.style.width = '0%';
+		this.progressBar.style.transition = 'width 0.3s ease';
+
+		const progressText = contentEl.createEl('p', {text: `0 / ${this.total} processed`});
+		progressText.style.textAlign = 'center';
+		progressText.style.margin = '10px 0';
+		progressText.id = 'progress-text';
+	}
+
+	updateProgress(current: number, status: string) {
+		this.current = current;
+		const percentage = (current / this.total) * 100;
+		
+		if (this.progressBar) {
+			this.progressBar.style.width = `${percentage}%`;
+		}
+		
+		if (this.statusText) {
+			this.statusText.textContent = status;
+		}
+
+		const progressText = this.contentEl.querySelector('#progress-text');
+		if (progressText) {
+			progressText.textContent = `${current} / ${this.total} processed`;
+		}
+	}
+
+	onClose() {
+		const {contentEl} = this;
+		contentEl.empty();
+	}
+}
+
+class BulkResultsModal extends Modal {
+	successful: { url: string; success: boolean }[];
+	failed: { url: string; success: boolean; error?: string }[];
+	onRetry: (failedUrls: string[]) => void;
+
+	constructor(app: App, successful: any[], failed: any[], onRetry: (failedUrls: string[]) => void) {
+		super(app);
+		this.successful = successful;
+		this.failed = failed;
+		this.onRetry = onRetry;
+	}
+
+	onOpen() {
+		const {contentEl} = this;
+		contentEl.empty();
+
+		contentEl.createEl('h2', {text: 'Bulk Processing Results'});
+
+		// Summary
+		const summary = contentEl.createDiv({cls: 'results-summary'});
+		summary.style.marginBottom = '20px';
+		summary.createEl('p', {text: `✅ Successfully processed: ${this.successful.length}`});
+		summary.createEl('p', {text: `❌ Failed to process: ${this.failed.length}`});
+
+		if (this.failed.length > 0) {
+			contentEl.createEl('h3', {text: 'Failed URLs:'});
+			
+			const failedContainer = contentEl.createDiv({cls: 'failed-urls'});
+			failedContainer.style.maxHeight = '300px';
+			failedContainer.style.overflowY = 'auto';
+			failedContainer.style.border = '1px solid var(--background-modifier-border)';
+			failedContainer.style.padding = '10px';
+			failedContainer.style.marginBottom = '15px';
+
+			this.failed.forEach(item => {
+				const failedItem = failedContainer.createDiv({cls: 'failed-item'});
+				failedItem.style.marginBottom = '10px';
+				
+				failedItem.createEl('div', {text: item.url});
+				failedItem.createEl('div', {
+					text: `Error: ${item.error || 'Unknown error'}`,
+					cls: 'error-text'
+				}).style.color = 'var(--text-error)';
+			});
+
+			// Action buttons
+			const buttonContainer = contentEl.createDiv({cls: 'modal-button-container'});
+			buttonContainer.style.display = 'flex';
+			buttonContainer.style.gap = '10px';
+			buttonContainer.style.marginTop = '20px';
+
+			const retryBtn = buttonContainer.createEl('button', {text: 'Retry Failed URLs', cls: 'mod-cta'});
+			retryBtn.onclick = () => {
+				const failedUrls = this.failed.map(item => item.url);
+				this.onRetry(failedUrls);
+				this.close();
+			};
+
+			const closeBtn = buttonContainer.createEl('button', {text: 'Close'});
+			closeBtn.onclick = () => this.close();
+		} else {
+			const closeBtn = contentEl.createEl('button', {text: 'Close', cls: 'mod-cta'});
+			closeBtn.style.marginTop = '20px';
+			closeBtn.onclick = () => this.close();
+		}
 	}
 
 	onClose() {
