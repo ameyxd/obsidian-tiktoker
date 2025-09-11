@@ -128,7 +128,7 @@ export default class TikTokerPlugin extends Plugin {
 			const expandedUrl = await this.expandUrl(url);
 			new Notice('Fetching TikTok data...');
 			
-			const tikTokData = await this.fetchTikTokData(expandedUrl);
+			const tikTokData = await this.fetchTikTokData(expandedUrl, false);
 			await this.createTikTokNote(tikTokData, false);
 		} catch (error) {
 			new Notice('Failed to process TikTok URL');
@@ -136,7 +136,7 @@ export default class TikTokerPlugin extends Plugin {
 		}
 	}
 
-	private async fetchTikTokData(url: string) {
+	private async fetchTikTokData(url: string, isBulkProcessing: boolean = false) {
 		const videoId = this.extractVideoId(url);
 		console.log('TikToker Debug - Video ID extracted:', videoId);
 		
@@ -183,11 +183,14 @@ export default class TikTokerPlugin extends Plugin {
 				embedHtml: workingEmbed,
 				thumbnailUrl: oembedData.thumbnail_url,
 				videoId: finalVideoId,
-				date: new Date().toISOString().split('T')[0]
+				date: new Date().toISOString().split('T')[0],
+				oembedFailed: false
 			};
 		} catch (error) {
 			console.error('TikToker Debug - oEmbed failed:', error);
-			new Notice('oEmbed failed, using fallback embed method');
+			if (!isBulkProcessing) {
+				new Notice('oEmbed failed, using fallback embed method');
+			}
 			
 			return {
 				author: this.extractAuthorFromUrl(url),
@@ -197,7 +200,8 @@ export default class TikTokerPlugin extends Plugin {
 				expandedUrl: url,
 				embedHtml: this.generateWorkingEmbed(videoId, url),
 				videoId: videoId,
-				date: new Date().toISOString().split('T')[0]
+				date: new Date().toISOString().split('T')[0],
+				oembedFailed: true
 			};
 		}
 	}
@@ -360,13 +364,13 @@ export default class TikTokerPlugin extends Plugin {
 			// Add source property
 			content += `source: "#tiktoker"\n`;
 			
-			// Add tags with tiktoker always included
+			// Add tags with tiktoker and unreviewed always included
 			if (this.settings.includeTagsFromHashtags && data.hashtags) {
 				const hashtagTags = data.hashtags.map((tag: string) => tag.replace('#', ''));
-				const allTags = ['tiktoker', ...hashtagTags];
+				const allTags = ['tiktoker', 'unreviewed', ...hashtagTags];
 				content += `tags: [${allTags.join(', ')}]\n`;
 			} else {
-				content += `tags: [tiktoker]\n`;
+				content += `tags: [tiktoker, unreviewed]\n`;
 			}
 			content += '---\n\n';
 		}
@@ -389,7 +393,7 @@ export default class TikTokerPlugin extends Plugin {
 			modal.open();
 		}
 
-		const results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string }[] = [];
+		const results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string; oembedFailed?: boolean }[] = [];
 		const processingQueue = [...urls];
 		let processed = 0;
 
@@ -408,14 +412,15 @@ export default class TikTokerPlugin extends Plugin {
 				const result = await Promise.race([
 					processUrlPromise,
 					timeoutPromise
-				]) as {success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string};
+				]) as {success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean};
 
 				results.push({ 
 					url, 
 					success: result.success,
 					duplicate: result.duplicate,
 					fileName: result.fileName,
-					noteTitle: result.noteTitle
+					noteTitle: result.noteTitle,
+					oembedFailed: result.oembedFailed
 				});
 				processed++;
 				
@@ -435,32 +440,38 @@ export default class TikTokerPlugin extends Plugin {
 		this.showBulkProcessingResults(results);
 	}
 
-	private async processTikTokUrlBulk(url: string): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string}> {
+	private async processTikTokUrlBulk(url: string): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean}> {
 		try {
 			const expandedUrl = await this.expandUrl(url);
-			const tikTokData = await this.fetchTikTokData(expandedUrl);
-			return await this.createTikTokNote(tikTokData, true);
+			const tikTokData = await this.fetchTikTokData(expandedUrl, true);
+			const result = await this.createTikTokNote(tikTokData, true);
+			return {
+				...result,
+				oembedFailed: tikTokData.oembedFailed
+			};
 		} catch (error) {
 			throw error;
 		}
 	}
 
-	private showBulkProcessingResults(results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string }[]) {
+	private showBulkProcessingResults(results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string; oembedFailed?: boolean }[]) {
 		const successful = results.filter(r => r.success);
 		const failed = results.filter(r => !r.success && !r.duplicate);
 		const duplicates = results.filter(r => r.duplicate);
+		const oembedFailed = results.filter(r => r.success && r.oembedFailed);
 
 		// Show single summary notice instead of multiple toasts
 		const summaryParts = [];
 		if (successful.length > 0) summaryParts.push(`✅ Created: ${successful.length}`);
 		if (duplicates.length > 0) summaryParts.push(`⚠️ Duplicates: ${duplicates.length}`);
+		if (oembedFailed.length > 0) summaryParts.push(`🔄 Fallback: ${oembedFailed.length}`);
 		if (failed.length > 0) summaryParts.push(`❌ Failed: ${failed.length}`);
 		
 		new Notice(summaryParts.join(' • '));
 
-		// Show detailed modal if there are duplicates or failures
-		if (duplicates.length > 0 || failed.length > 0) {
-			const modal = new BulkResultsModal(this.app, successful, failed, duplicates, (failedUrls) => {
+		// Show detailed modal if there are duplicates, failures, or oEmbed fallbacks
+		if (duplicates.length > 0 || failed.length > 0 || oembedFailed.length > 0) {
+			const modal = new BulkResultsModal(this.app, successful, failed, duplicates, oembedFailed, (failedUrls) => {
 				// Add a delay before retrying
 				setTimeout(() => {
 					this.processBulkTikToks(failedUrls);
@@ -806,6 +817,8 @@ class BulkProgressModal extends Modal {
 	current: number = 0;
 	progressBar: HTMLDivElement;
 	statusText: HTMLParagraphElement;
+	isCompleted: boolean = false;
+	minimalToast: HTMLDivElement | null = null;
 
 	constructor(app: App, total: number) {
 		super(app);
@@ -856,6 +869,88 @@ class BulkProgressModal extends Modal {
 		if (progressText) {
 			progressText.textContent = `${current} / ${this.total} processed`;
 		}
+
+		// Update minimal toast if it exists
+		this.updateMinimalToast();
+	}
+
+	close() {
+		if (!this.isCompleted && this.current > 0) {
+			this.showMinimalToast();
+		}
+		super.close();
+	}
+
+	private showMinimalToast() {
+		// Remove existing toast if any
+		if (this.minimalToast) {
+			this.minimalToast.remove();
+		}
+
+		// Create minimal progress toast
+		this.minimalToast = document.body.createDiv({cls: 'minimal-progress-toast'});
+		this.minimalToast.style.position = 'fixed';
+		this.minimalToast.style.bottom = '20px';
+		this.minimalToast.style.right = '20px';
+		this.minimalToast.style.backgroundColor = 'var(--background-primary)';
+		this.minimalToast.style.border = '1px solid var(--background-modifier-border)';
+		this.minimalToast.style.borderRadius = '8px';
+		this.minimalToast.style.padding = '12px 16px';
+		this.minimalToast.style.fontSize = '0.9em';
+		this.minimalToast.style.zIndex = '1000';
+		this.minimalToast.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+		this.minimalToast.style.minWidth = '200px';
+
+		const progressText = this.minimalToast.createDiv();
+		progressText.textContent = `Processing TikToks: ${this.current} / ${this.total}`;
+		progressText.style.marginBottom = '8px';
+
+		const miniProgressBar = this.minimalToast.createDiv();
+		miniProgressBar.style.width = '100%';
+		miniProgressBar.style.height = '4px';
+		miniProgressBar.style.backgroundColor = 'var(--background-modifier-border)';
+		miniProgressBar.style.borderRadius = '2px';
+		miniProgressBar.style.overflow = 'hidden';
+
+		const miniProgress = miniProgressBar.createDiv();
+		miniProgress.style.height = '100%';
+		miniProgress.style.backgroundColor = 'var(--interactive-accent)';
+		miniProgress.style.width = `${(this.current / this.total) * 100}%`;
+		miniProgress.style.transition = 'width 0.3s ease';
+
+		// Auto-remove after completion or timeout
+		setTimeout(() => {
+			if (this.minimalToast) {
+				this.minimalToast.remove();
+				this.minimalToast = null;
+			}
+		}, 30000); // 30 seconds timeout
+	}
+
+	private updateMinimalToast() {
+		if (!this.minimalToast) return;
+
+		const progressText = this.minimalToast.querySelector('div');
+		const miniProgress = this.minimalToast.querySelector('div > div > div');
+		
+		if (progressText) {
+			progressText.textContent = `Processing TikToks: ${this.current} / ${this.total}`;
+		}
+
+		if (miniProgress) {
+			(miniProgress as HTMLElement).style.width = `${(this.current / this.total) * 100}%`;
+		}
+
+		// Remove toast when completed
+		if (this.current >= this.total) {
+			this.isCompleted = true;
+			setTimeout(() => {
+				if (this.minimalToast) {
+					this.minimalToast.remove();
+					this.minimalToast = null;
+				}
+			}, 2000); // Remove 2 seconds after completion
+		}
 	}
 
 	onClose() {
@@ -868,13 +963,15 @@ class BulkResultsModal extends Modal {
 	successful: { url: string; success: boolean }[];
 	failed: { url: string; success: boolean; error?: string }[];
 	duplicates: { url: string; duplicate: boolean; fileName?: string; noteTitle?: string }[];
+	oembedFailed: { url: string; success: boolean; oembedFailed: boolean; fileName?: string; noteTitle?: string }[];
 	onRetry: (failedUrls: string[]) => void;
 
-	constructor(app: App, successful: any[], failed: any[], duplicates: any[], onRetry: (failedUrls: string[]) => void) {
+	constructor(app: App, successful: any[], failed: any[], duplicates: any[], oembedFailed: any[], onRetry: (failedUrls: string[]) => void) {
 		super(app);
 		this.successful = successful;
 		this.failed = failed;
 		this.duplicates = duplicates;
+		this.oembedFailed = oembedFailed;
 		this.onRetry = onRetry;
 	}
 
@@ -890,6 +987,9 @@ class BulkResultsModal extends Modal {
 		summary.createEl('p', {text: `✅ Successfully processed: ${this.successful.length}`});
 		if (this.duplicates.length > 0) {
 			summary.createEl('p', {text: `⚠️ Duplicate files skipped: ${this.duplicates.length}`});
+		}
+		if (this.oembedFailed.length > 0) {
+			summary.createEl('p', {text: `🔄 Used fallback embed: ${this.oembedFailed.length}`});
 		}
 		summary.createEl('p', {text: `❌ Failed to process: ${this.failed.length}`});
 
@@ -907,14 +1007,79 @@ class BulkResultsModal extends Modal {
 
 			this.duplicates.forEach(item => {
 				const duplicateItem = duplicatesContainer.createDiv({cls: 'duplicate-item'});
-				duplicateItem.style.marginBottom = '8px';
+				duplicateItem.style.marginBottom = '12px';
+				duplicateItem.style.display = 'flex';
+				duplicateItem.style.justifyContent = 'space-between';
+				duplicateItem.style.alignItems = 'center';
 				
-				duplicateItem.createEl('div', {text: `${item.noteTitle || item.fileName}`});
-				duplicateItem.createEl('div', {
+				const content = duplicateItem.createDiv();
+				content.createEl('div', {text: `${item.noteTitle || item.fileName}`});
+				content.createEl('div', {
 					text: item.url,
 					cls: 'duplicate-url'
 				}).style.fontSize = '0.8em';
-				duplicateItem.style.opacity = '0.8';
+				
+				const buttonContainer = duplicateItem.createDiv();
+				buttonContainer.style.display = 'flex';
+				buttonContainer.style.gap = '5px';
+				
+				const replaceBtn = buttonContainer.createEl('button', {text: 'Replace', cls: 'duplicate-btn'});
+				replaceBtn.style.padding = '4px 8px';
+				replaceBtn.style.fontSize = '0.8em';
+				replaceBtn.onclick = () => this.handleDuplicateAction(item.url, 'replace');
+				
+				const duplicateBtn = buttonContainer.createEl('button', {text: 'Duplicate', cls: 'duplicate-btn'});
+				duplicateBtn.style.padding = '4px 8px';
+				duplicateBtn.style.fontSize = '0.8em';
+				duplicateBtn.onclick = () => this.handleDuplicateAction(item.url, 'duplicate');
+				
+				const skipBtn = buttonContainer.createEl('button', {text: 'Skip', cls: 'duplicate-btn'});
+				skipBtn.style.padding = '4px 8px';
+				skipBtn.style.fontSize = '0.8em';
+				skipBtn.onclick = () => this.handleDuplicateAction(item.url, 'skip');
+			});
+
+			// Add bulk duplicate actions
+			const bulkDuplicateActions = contentEl.createDiv({cls: 'bulk-duplicate-actions'});
+			bulkDuplicateActions.style.marginTop = '10px';
+			bulkDuplicateActions.style.display = 'flex';
+			bulkDuplicateActions.style.gap = '10px';
+			
+			const bulkReplaceBtn = bulkDuplicateActions.createEl('button', {text: 'Replace All Duplicates'});
+			bulkReplaceBtn.onclick = () => this.handleBulkDuplicateAction('replace');
+			
+			const bulkDuplicateBtn = bulkDuplicateActions.createEl('button', {text: 'Create All as Duplicates'});
+			bulkDuplicateBtn.onclick = () => this.handleBulkDuplicateAction('duplicate');
+		}
+
+		// Show oEmbed fallback section
+		if (this.oembedFailed.length > 0) {
+			contentEl.createEl('h3', {text: 'Fallback Embed Files:'});
+			
+			const fallbackContainer = contentEl.createDiv({cls: 'fallback-urls'});
+			fallbackContainer.style.maxHeight = '200px';
+			fallbackContainer.style.overflowY = 'auto';
+			fallbackContainer.style.border = '1px solid var(--background-modifier-border)';
+			fallbackContainer.style.padding = '10px';
+			fallbackContainer.style.marginBottom = '15px';
+			fallbackContainer.style.backgroundColor = 'var(--background-secondary)';
+
+			this.oembedFailed.forEach(item => {
+				const fallbackItem = fallbackContainer.createDiv({cls: 'fallback-item'});
+				fallbackItem.style.marginBottom = '8px';
+				fallbackItem.style.display = 'flex';
+				fallbackItem.style.alignItems = 'center';
+				
+				const icon = fallbackItem.createSpan({text: '🔄'});
+				icon.style.marginRight = '8px';
+				
+				const content = fallbackItem.createDiv();
+				content.createEl('div', {text: `${item.noteTitle || item.fileName}`});
+				content.createEl('div', {
+					text: item.url,
+					cls: 'fallback-url'
+				}).style.fontSize = '0.8em';
+				content.style.opacity = '0.9';
 			});
 		}
 
@@ -958,6 +1123,67 @@ class BulkResultsModal extends Modal {
 			const closeBtn = contentEl.createEl('button', {text: 'Close', cls: 'mod-cta'});
 			closeBtn.style.marginTop = '20px';
 			closeBtn.onclick = () => this.close();
+		}
+	}
+
+	private async handleDuplicateAction(url: string, action: 'replace' | 'duplicate' | 'skip') {
+		// Find the duplicate item and process it
+		const duplicateItem = this.duplicates.find(item => item.url === url);
+		if (!duplicateItem) return;
+
+		try {
+			// Get the plugin instance from the app
+			const plugin = (this.app as any).plugins.getPlugin('tiktoker');
+			if (plugin) {
+				new Notice(`Processing duplicate: ${action}`);
+				
+				// Process the URL with the specified action
+				const expandedUrl = await plugin.expandUrl(url);
+				const tikTokData = await plugin.fetchTikTokData(expandedUrl, false);
+				
+				if (action === 'replace') {
+					// Delete the existing file and create new one
+					const folderPath = plugin.settings.outputFolder;
+					const fileName = plugin.generateFileName(tikTokData);
+					const filePath = folderPath ? `${folderPath}/${fileName}.md` : `${fileName}.md`;
+					const existingFile = plugin.app.vault.getAbstractFileByPath(filePath);
+					
+					if (existingFile) {
+						await plugin.app.vault.delete(existingFile);
+					}
+					const noteContent = plugin.generateNoteContent(tikTokData);
+					await plugin.app.vault.create(filePath, noteContent);
+					new Notice('File replaced');
+				} else if (action === 'duplicate') {
+					// Create with incremented name
+					await plugin.createTikTokNote(tikTokData, false);
+					new Notice('Duplicate file created');
+				}
+				// Skip action does nothing
+				
+				// Remove this item from the duplicates list and refresh
+				this.duplicates = this.duplicates.filter(item => item.url !== url);
+				this.onOpen(); // Refresh the modal
+			}
+		} catch (error) {
+			new Notice('Failed to process duplicate');
+			console.error('Duplicate processing error:', error);
+		}
+	}
+
+	private async handleBulkDuplicateAction(action: 'replace' | 'duplicate') {
+		const urls = this.duplicates.map(item => item.url);
+		
+		for (const url of urls) {
+			await this.handleDuplicateAction(url, action);
+			// Small delay between processing
+			await new Promise(resolve => setTimeout(resolve, 100));
+		}
+		
+		if (this.duplicates.length === 0) {
+			// All duplicates processed, close modal or show success
+			new Notice(`All duplicates ${action === 'replace' ? 'replaced' : 'created'}`);
+			this.close();
 		}
 	}
 
