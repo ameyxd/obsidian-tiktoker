@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl } from 'obsidian';
 
 interface TikTokerSettings {
 	outputFolder: string;
@@ -137,6 +137,13 @@ export default class TikTokerPlugin extends Plugin {
 	}
 
 	private async fetchTikTokData(url: string, isBulkProcessing: boolean = false) {
+		// On mobile, skip oEmbed entirely and use fallback methods for better reliability
+		if (Platform.isMobile) {
+			console.log('TikToker Debug - Mobile detected, using fallback methods');
+			return await this.fetchTikTokDataMobile(url, isBulkProcessing);
+		}
+		
+		// Desktop: Use existing oEmbed-first approach
 		const videoId = this.extractVideoId(url);
 		console.log('TikToker Debug - Video ID extracted:', videoId);
 		
@@ -154,7 +161,7 @@ export default class TikTokerPlugin extends Plugin {
 			const controller = new AbortController();
 			setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
 
-			const response = await fetch(oembedUrl, {
+			const response = await this.makeHttpRequest(oembedUrl, {
 				signal: controller.signal,
 				headers: {
 					'User-Agent': 'Mozilla/5.0 (compatible; TikToker-Plugin/1.0)'
@@ -213,11 +220,12 @@ export default class TikTokerPlugin extends Plugin {
 			
 			// Check if this is a photo slideshow and handle accordingly
 			const isSlideshow = url.includes('/photo/');
-			const author = this.extractAuthorFromUrl(url);
+			const authorWithAt = this.extractAuthorFromUrl(url);
+			const author = authorWithAt.replace('@', ''); // Remove @ for properties
 			
 			if (isSlideshow) {
 				// For photo slideshows, use simple markdown image format
-				const title = `TikTok photo slideshow by ${author}`;
+				const title = `TikTok photo slideshow by ${authorWithAt}`;
 				return {
 					author: author,
 					description: 'TikTok Photo Slideshow',
@@ -232,14 +240,14 @@ export default class TikTokerPlugin extends Plugin {
 					isSlideshow: true
 				};
 			} else {
-				// Regular video fallback
+				// Regular video fallback - use iframe instead of blockquote
 				return {
 					author: author,
 					description: 'TikTok Post',
 					hashtags: [],
 					url: url,
 					expandedUrl: url,
-					embedHtml: this.generateWorkingEmbed(videoId, url),
+					embedHtml: this.createObsidianCompatibleEmbed(null, videoId, url),
 					videoId: videoId,
 					createdDate: new Date().toISOString().split('T')[0],
 					postedDate: postedDate,
@@ -248,6 +256,60 @@ export default class TikTokerPlugin extends Plugin {
 				};
 			}
 		}
+	}
+
+	private async fetchTikTokDataMobile(url: string, isBulkProcessing: boolean = false) {
+		console.log('TikToker Debug - Mobile processing for URL:', url);
+		
+		// First, expand short URLs (like /t/ format) to get the full URL with author info
+		const expandedUrl = await this.expandUrl(url);
+		console.log('TikToker Debug - Expanded URL:', expandedUrl);
+		
+		// Extract video ID from expanded URL
+		const videoId = this.extractVideoId(expandedUrl);
+		console.log('TikToker Debug - Mobile Video ID:', videoId);
+		
+		// Check if this is a slideshow URL (contains /photo/)
+		const isSlideshow = expandedUrl.includes('/photo/');
+		if (isSlideshow) {
+			console.log('TikToker Debug - Mobile slideshow detected');
+			return await this.handleSlideshowUrl(expandedUrl, videoId, isBulkProcessing);
+		}
+		
+		// Extract author from expanded URL
+		const authorWithAt = this.extractAuthorFromUrl(expandedUrl);
+		const author = authorWithAt.replace('@', ''); // Remove @ for properties
+		
+		// Check for private video indicators in URL expansion
+		if (author === 'Unknown' || !videoId) {
+			console.log('TikToker Debug - Mobile: possible private video or parsing failure');
+			// This might be a private video - use URL as fallback
+			return await this.handlePrivateVideo(expandedUrl, videoId, isBulkProcessing);
+		}
+		
+		const postedDate = await this.extractTikTokPostedDate(expandedUrl, videoId);
+		
+		// For mobile, create a simple iframe embed (skip oEmbed entirely)
+		const embedHtml = this.createObsidianCompatibleEmbed(null, videoId, expandedUrl);
+		const description = `TikTok from ${authorWithAt}`;
+		
+		// Add markdown image fallback for mobile in case iframe doesn't work
+		const markdownFallback = `\n\n![${description}](${expandedUrl})`;
+		const finalEmbedHtml = embedHtml + markdownFallback;
+		
+		console.log('TikToker Debug - Mobile processing complete with markdown fallback');
+		return {
+			author: author,
+			description: description,
+			hashtags: [],
+			url: url,
+			expandedUrl: expandedUrl,
+			embedHtml: finalEmbedHtml,
+			videoId: videoId,
+			createdDate: new Date().toISOString().split('T')[0],
+			postedDate: postedDate,
+			oembedFailed: true // Mark as oEmbed failed since we skipped it
+		};
 	}
 
 	private async handleSlideshowUrl(url: string, videoId: string | null, isBulkProcessing: boolean): Promise<any> {
@@ -376,8 +438,7 @@ export default class TikTokerPlugin extends Plugin {
 				const controller = new AbortController();
 				setTimeout(() => controller.abort(), 5000); // 5 second timeout
 				
-				const response = await fetch(url, {
-					method: 'HEAD',
+				const response = await this.makeHeadRequest(url, {
 					signal: controller.signal,
 					headers: {
 						'User-Agent': 'Mozilla/5.0 (compatible; TikToker-Plugin/1.0)'
@@ -447,8 +508,7 @@ export default class TikTokerPlugin extends Plugin {
 				const controller = new AbortController();
 				setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
 				
-				const response = await fetch(url, {
-					method: 'HEAD',
+				const response = await this.makeHeadRequest(url, {
 					redirect: 'follow',
 					signal: controller.signal
 				});
@@ -464,6 +524,85 @@ export default class TikTokerPlugin extends Plugin {
 	private extractVideoId(url: string): string | null {
 		const videoIdMatch = url.match(/\/video\/(\d+)/);
 		return videoIdMatch ? videoIdMatch[1] : null;
+	}
+
+	// Network request wrapper methods for mobile CORS compatibility
+	private async makeHttpRequest(url: string, options: {method?: string, headers?: Record<string, string>, signal?: AbortSignal} = {}): Promise<{text: () => Promise<string>, json: () => Promise<any>, ok: boolean, status: number}> {
+		if (Platform.isMobile) {
+			// Use Obsidian's native request method on mobile to bypass CORS
+			const headers = {
+				'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+				...(options.headers || {})
+			};
+			
+			try {
+				const response = await request({
+					method: options.method || 'GET',
+					url: url,
+					headers: headers
+				});
+				
+				// Return fetch-like interface for compatibility
+				return {
+					text: async () => response,
+					json: async () => JSON.parse(response),
+					ok: true,
+					status: 200
+				};
+			} catch (error) {
+				return {
+					text: async () => { throw error; },
+					json: async () => { throw error; },
+					ok: false,
+					status: 0
+				};
+			}
+		} else {
+			// Use standard fetch on desktop (preserve existing functionality)
+			return await fetch(url, options);
+		}
+	}
+
+	private async makeHeadRequest(url: string, options: {redirect?: string, signal?: AbortSignal, headers?: Record<string, string>} = {}): Promise<{url: string, headers: {get: (key: string) => string | null}}> {
+		if (Platform.isMobile) {
+			// Use Obsidian's requestUrl for HEAD requests on mobile
+			try {
+				const response = await requestUrl({
+					url: url,
+					method: 'HEAD',
+					headers: {
+						'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+						...(options.headers || {})
+					}
+				});
+				return { 
+					url: url, // requestUrl doesn't provide final URL, use original
+					headers: {
+						get: (key: string) => response.headers[key] || null
+					}
+				};
+			} catch (error) {
+				console.warn('Mobile HEAD request failed, using original URL:', error);
+				return { 
+					url: url,
+					headers: {
+						get: () => null
+					}
+				};
+			}
+		} else {
+			// Use standard fetch on desktop (preserve existing functionality)
+			const response = await fetch(url, {
+				method: 'HEAD',
+				redirect: (options.redirect as RequestRedirect) || 'follow',
+				signal: options.signal,
+				headers: options.headers
+			});
+			return { 
+				url: response.url,
+				headers: response.headers
+			};
+		}
 	}
 
 	private async createTikTokNote(data: any, isBulkProcessing: boolean = false): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string}> {
