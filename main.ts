@@ -1,4 +1,5 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import MultiUrlModal from './src/ui/multi-url-modal';
 
 interface TikTokerSettings {
 	outputFolder: string;
@@ -22,8 +23,8 @@ interface TikTokerSettings {
 }
 
 const DEFAULT_SETTINGS: TikTokerSettings = {
-	outputFolder: 'TikToks',
-	fileNamingPattern: 'TikTok by {{author}} on {{description}}',
+        outputFolder: 'TikToks',
+        fileNamingPattern: '{{date}}-{{author}}-{{videoId}}',
 	includeHashtagsInContent: true,
 	hashtagDisplayFormat: '#{{tag}}',
 	enableProperties: true,
@@ -37,8 +38,8 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	apiKey: '',
 	handlePrivateVideos: 'create-empty',
 	duplicateFileHandling: 'replace',
-	urlTimeout: 10,
-	noteTitleTemplate: 'TikTok by {{author}} on {{description}}',
+        urlTimeout: 10,
+        noteTitleTemplate: 'TikTok by {{author}} on {{description}}',
 	noteContentTemplate: '{{iframe}}\n\n## Description\n{{description}}\n\n## Hashtags\n{{hashtags}}\n\n{{transcription}}'
 }
 
@@ -63,21 +64,34 @@ export default class TikTokerPlugin extends Plugin {
 		this.addSettingTab(new TikTokerSettingTab(this.app, this));
 	}
 
-	async processTikTokFromClipboard() {
-		try {
-			const clipboardText = await navigator.clipboard.readText();
-			if (!this.isTikTokUrl(clipboardText)) {
-				new Notice('Clipboard does not contain a valid TikTok URL');
-				return;
-			}
+       async processTikTokFromClipboard() {
+               try {
+                       const clipboardText = await navigator.clipboard.readText();
+                       const urls = clipboardText.match(/https?:\/\/(?:www\.)?tiktok\.com\S+/g);
+                       if (!urls || urls.length === 0) {
+                               new Notice('Clipboard does not contain a valid TikTok URL');
+                               return;
+                       }
 
-			new Notice('Processing TikTok URL...');
-			await this.processTikTokUrl(clipboardText.trim());
-		} catch (error) {
-			new Notice('Failed to read clipboard or process TikTok URL');
-			console.error('TikToker error:', error);
-		}
-	}
+                       const modal = new MultiUrlModal(this.app, urls, async (selected) => {
+                               if (selected.length === 0) {
+                                       new Notice('No URLs selected');
+                                       return;
+                               }
+                               await this.processTikTokUrls(selected);
+                       });
+                       modal.open();
+               } catch (error) {
+                       new Notice('Failed to read clipboard or process TikTok URL');
+                       console.error('TikToker error:', error);
+               }
+       }
+
+       private async processTikTokUrls(urls: string[]) {
+               for (let i = 0; i < urls.length; i++) {
+                       await this.processTikTokUrl(urls[i].trim(), i + 1);
+               }
+       }
 
 	private isTikTokUrl(url: string): boolean {
 		const tikTokPatterns = [
@@ -88,18 +102,18 @@ export default class TikTokerPlugin extends Plugin {
 		return tikTokPatterns.some(pattern => pattern.test(url.trim()));
 	}
 
-	private async processTikTokUrl(url: string) {
-		try {
-			const expandedUrl = await this.expandUrl(url);
-			new Notice('Fetching TikTok data...');
-			
-			const tikTokData = await this.fetchTikTokData(expandedUrl);
-			await this.createTikTokNote(tikTokData);
-		} catch (error) {
-			new Notice('Failed to process TikTok URL');
-			console.error('TikToker URL processing error:', error);
-		}
-	}
+       private async processTikTokUrl(url: string, index: number) {
+               try {
+                       const expandedUrl = await this.expandUrl(url);
+                       new Notice('Fetching TikTok data...');
+
+                       const tikTokData = await this.fetchTikTokData(expandedUrl);
+                       await this.createTikTokNote(tikTokData, index);
+               } catch (error) {
+                       new Notice('Failed to process TikTok URL');
+                       console.error('TikToker URL processing error:', error);
+               }
+       }
 
 	private async fetchTikTokData(url: string) {
 		const videoId = this.extractVideoId(url);
@@ -232,10 +246,10 @@ export default class TikTokerPlugin extends Plugin {
 		return videoIdMatch ? videoIdMatch[1] : null;
 	}
 
-	private async createTikTokNote(data: any) {
-		const fileName = this.generateFileName(data);
-		const noteTitle = this.generateNoteTitle(data);
-		const noteContent = this.generateNoteContent(data);
+       private async createTikTokNote(data: any, index: number) {
+               const fileName = this.generateFileName(data, index);
+               const noteTitle = this.generateNoteTitle(data, index);
+               const noteContent = this.generateNoteContent(data);
 
 		const folderPath = this.settings.outputFolder;
 		if (folderPath && !this.app.vault.getAbstractFileByPath(folderPath)) {
@@ -286,20 +300,22 @@ export default class TikTokerPlugin extends Plugin {
 		});
 	}
 
-	private generateFileName(data: any): string {
-		return this.settings.fileNamingPattern
-			.replace(/{{author}}/g, (data.author || 'unknown').replace(/[@#]/g, ''))
-			.replace(/{{date}}/g, data.date || new Date().toISOString().split('T')[0])
-			.replace(/{{videoId}}/g, data.videoId || 'unknown')
-			.replace(/{{description}}/g, (data.description || 'TikTok Video').substring(0, 100).replace(/[^\w\s-]/g, '').trim())
-			.replace(/{{title}}/g, (data.description || 'tiktok').substring(0, 50).replace(/[^\w\s-]/g, ''));
-	}
+       private generateFileName(data: any, index: number): string {
+               return this.settings.fileNamingPattern
+                       .replace(/{{index}}/g, index.toString())
+                       .replace(/{{author}}/g, (data.author || 'unknown').replace(/[@#]/g, ''))
+                       .replace(/{{date}}/g, data.date || new Date().toISOString().split('T')[0])
+                       .replace(/{{videoId}}/g, data.videoId || 'unknown')
+                       .replace(/{{description}}/g, (data.description || 'TikTok Video').substring(0, 100).replace(/[^\w\s-]/g, '').trim())
+                       .replace(/{{title}}/g, (data.description || 'tiktok').substring(0, 50).replace(/[^\w\s-]/g, ''));
+       }
 
-	private generateNoteTitle(data: any): string {
-		return this.settings.noteTitleTemplate
-			.replace(/{{description}}/g, data.description || 'Unknown')
-			.replace(/{{author}}/g, data.author || 'Unknown');
-	}
+       private generateNoteTitle(data: any, index: number): string {
+               return this.settings.noteTitleTemplate
+                       .replace(/{{index}}/g, index.toString())
+                       .replace(/{{description}}/g, data.description || 'Unknown')
+                       .replace(/{{author}}/g, data.author || 'Unknown');
+       }
 
 	private generateNoteContent(data: any): string {
 		let content = '';
@@ -361,8 +377,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 		containerEl.createEl('h2', {text: 'TikToker Settings'});
 
-		const availableVariables = containerEl.createEl('div', {cls: 'setting-item-description'});
-		availableVariables.innerHTML = '<strong>Available template variables:</strong> {{author}}, {{description}}, {{hashtags}}, {{iframe}}, {{transcription}}, {{date}}, {{url}}';
+               const availableVariables = containerEl.createEl('div', {cls: 'setting-item-description'});
+               availableVariables.innerHTML = '<strong>Available template variables:</strong> {{author}}, {{description}}, {{hashtags}}, {{iframe}}, {{transcription}}, {{date}}, {{url}}, {{index}}';
 
 		new Setting(containerEl)
 			.setName('Output Folder')
@@ -378,24 +394,24 @@ class TikTokerSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('File Naming Pattern')
 			.setDesc('Pattern for generating file names')
-			.addText(text => text
-				.setPlaceholder('{{author}}-{{date}}-{{title}}')
-				.setValue(this.plugin.settings.fileNamingPattern)
-				.onChange(async (value) => {
-					this.plugin.settings.fileNamingPattern = value;
-					await this.plugin.saveSettings();
-				}));
+                       .addText(text => text
+                               .setPlaceholder('{{index}}-{{author}}-{{date}}-{{title}}')
+                               .setValue(this.plugin.settings.fileNamingPattern)
+                               .onChange(async (value) => {
+                                       this.plugin.settings.fileNamingPattern = value;
+                                       await this.plugin.saveSettings();
+                               }));
 
 		new Setting(containerEl)
 			.setName('Note Title Template')
 			.setDesc('Template for generating note titles')
-			.addText(text => text
-				.setPlaceholder('TikTok on {{description}} from {{author}}')
-				.setValue(this.plugin.settings.noteTitleTemplate)
-				.onChange(async (value) => {
-					this.plugin.settings.noteTitleTemplate = value;
-					await this.plugin.saveSettings();
-				}));
+                       .addText(text => text
+                               .setPlaceholder('TikTok {{index}} on {{description}} from {{author}}')
+                               .setValue(this.plugin.settings.noteTitleTemplate)
+                               .onChange(async (value) => {
+                                       this.plugin.settings.noteTitleTemplate = value;
+                                       await this.plugin.saveSettings();
+                               }));
 
 
 		new Setting(containerEl)

@@ -17,18 +17,19 @@ Save TikTok videos as markdown notes with embedded content and metadata extracti
 
 ### Template Variables
 
-The plugin supports the following template variables:
-- `{{date}}` - Current date (YYYY-MM-DD format)
-- `{{author}}` - TikTok author username
-- `{{description}}` - Video description/title
-- `{{videoid}}` - TikTok video ID
-- `{{hashtags}}` - Extracted hashtags
+ The plugin supports the following template variables:
+ - `{{date}}` - Current date (YYYY-MM-DD format)
+ - `{{author}}` - TikTok author username
+ - `{{description}}` - Video description/title
+ - `{{videoId}}` - TikTok video ID
+ - `{{hashtags}}` - Extracted hashtags
+ - `{{index}}` - Sequential number when importing multiple URLs
 
 ### Default Settings
 
 - **Output folder**: Root vault directory
-- **File naming**: `{{date}}-{{author}}-{{videoid}}`
-- **Note title**: `TikTok by {{author}} on {{description}}`
+ - **File naming**: `{{date}}-{{author}}-{{videoId}}`
+ - **Note title**: `TikTok by {{author}} on {{description}}`
 - **Auto-tagging**: Adds `tiktoker` tag to all created notes
 - **Properties**: Includes source URL and metadata in frontmatter
 
