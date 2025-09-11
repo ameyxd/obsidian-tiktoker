@@ -198,167 +198,160 @@ export default class TikTokerPlugin extends Plugin {
 			};
 		} catch (error) {
 			console.error('TikToker Debug - oEmbed failed:', error);
+			
+			// Check if this might be a private video
+			const isPrivateVideo = this.detectPrivateVideo(error, url);
+			if (isPrivateVideo) {
+				return await this.handlePrivateVideo(url, videoId, isBulkProcessing);
+			}
+			
 			if (!isBulkProcessing) {
 				new Notice('oEmbed failed, using fallback embed method');
 			}
 			
 			const postedDate = await this.extractTikTokPostedDate(url, videoId);
 			
-			// Try to detect if this is a slideshow post
-			const slideshowData = await this.detectAndHandleSlideshow(url, videoId);
+			// Check if this is a photo slideshow and handle accordingly
+			const isSlideshow = url.includes('/photo/');
+			const author = this.extractAuthorFromUrl(url);
 			
-			return {
-				author: this.extractAuthorFromUrl(url),
-				description: slideshowData.description || 'TikTok Post',
-				hashtags: slideshowData.hashtags || [],
-				url: url,
-				expandedUrl: url,
-				embedHtml: slideshowData.embedHtml || this.generateWorkingEmbed(videoId, url),
-				videoId: videoId,
-				createdDate: new Date().toISOString().split('T')[0], // When we saved it
-				postedDate: postedDate, // When TikTok was originally posted
-				oembedFailed: true,
-				isSlideshow: slideshowData.isSlideshow
-			};
+			if (isSlideshow) {
+				// For photo slideshows, use simple markdown image format
+				const title = `TikTok photo slideshow by ${author}`;
+				return {
+					author: author,
+					description: 'TikTok Photo Slideshow',
+					hashtags: [],
+					url: url,
+					expandedUrl: url,
+					embedHtml: `![${title}](${url})`,
+					videoId: videoId,
+					createdDate: new Date().toISOString().split('T')[0],
+					postedDate: postedDate,
+					oembedFailed: true,
+					isSlideshow: true
+				};
+			} else {
+				// Regular video fallback
+				return {
+					author: author,
+					description: 'TikTok Post',
+					hashtags: [],
+					url: url,
+					expandedUrl: url,
+					embedHtml: this.generateWorkingEmbed(videoId, url),
+					videoId: videoId,
+					createdDate: new Date().toISOString().split('T')[0],
+					postedDate: postedDate,
+					oembedFailed: true,
+					isSlideshow: false
+				};
+			}
 		}
 	}
 
 	private async handleSlideshowUrl(url: string, videoId: string | null, isBulkProcessing: boolean): Promise<any> {
 		console.log('TikToker Debug - Processing slideshow URL');
 		
-		// Try to get slideshow data
-		const slideshowData = await this.detectAndHandleSlideshow(url, videoId);
+		// Try to extract basic info for the title
+		const authorWithAt = this.extractAuthorFromUrl(url);
+		const author = authorWithAt.replace('@', ''); // Remove @ for properties
 		const postedDate = await this.extractTikTokPostedDate(url, videoId);
 		
+		// Create simple markdown image format
+		const title = `TikTok photo slideshow by ${authorWithAt}`;
+		const embedHtml = `![${title}](${url})`;
+		
 		return {
-			author: this.extractAuthorFromUrl(url),
-			description: slideshowData.description || 'TikTok Slideshow',
-			hashtags: slideshowData.hashtags || [],
+			author: author,
+			description: 'TikTok Photo Slideshow',
+			hashtags: [],
 			url: url,
 			expandedUrl: url,
-			embedHtml: slideshowData.embedHtml || this.generateSlideshowEmbed(url, videoId, slideshowData.description),
+			embedHtml: embedHtml,
 			videoId: videoId,
 			createdDate: new Date().toISOString().split('T')[0],
 			postedDate: postedDate,
-			oembedFailed: false, // We're handling this directly
+			oembedFailed: false,
 			isSlideshow: true
 		};
 	}
 
-	private async detectAndHandleSlideshow(url: string, videoId: string | null): Promise<{
-		isSlideshow: boolean;
-		description?: string;
-		hashtags?: string[];
-		embedHtml?: string;
-	}> {
-		try {
-			// Attempt to fetch page content to detect slideshow
-			const controller = new AbortController();
-			setTimeout(() => controller.abort(), 8000); // 8 second timeout
+	private detectPrivateVideo(error: any, url: string): boolean {
+		// Common indicators of private videos:
+		// - 403 Forbidden responses
+		// - 404 Not Found (sometimes used for private content)
+		// - Error messages containing "private" or "not available"
+		if (error && typeof error.message === 'string') {
+			const errorMessage = error.message.toLowerCase();
 			
-			const response = await fetch(url, {
-				signal: controller.signal,
-				headers: {
-					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-				}
-			});
-
-			if (response.ok) {
-				const html = await response.text();
-				
-				// Look for indicators of slideshow content
-				const isSlideshow = this.detectSlideshowFromHTML(html);
-				
-				if (isSlideshow) {
-					console.log('TikToker: Detected slideshow post');
-					
-					// Extract metadata from HTML
-					const description = this.extractDescriptionFromHTML(html);
-					const hashtags = this.extractHashtagsFromHTML(html);
-					
-					// Generate slideshow-specific embed
-					const embedHtml = this.generateSlideshowEmbed(url, videoId, description);
-					
-					return {
-						isSlideshow: true,
-						description: description || 'TikTok Slideshow',
-						hashtags: hashtags,
-						embedHtml: embedHtml
-					};
-				}
+			// Check for HTTP status codes indicating private content
+			if (errorMessage.includes('403') || errorMessage.includes('forbidden')) {
+				return true;
 			}
-		} catch (error) {
-			console.log('TikToker: Could not fetch slideshow data:', error);
-		}
-
-		return { isSlideshow: false };
-	}
-
-	private detectSlideshowFromHTML(html: string): boolean {
-		// Look for indicators that this is a slideshow post
-		const slideshowIndicators = [
-			/imagePost/i,
-			/carousel/i,
-			/slideshow/i,
-			/"itemListElement".*"@type".*"ImageObject"/s,
-			/data-e2e="image-card"/i,
-			/"contentUrl".*\.jpg|\.jpeg|\.png/i
-		];
-		
-		return slideshowIndicators.some(pattern => pattern.test(html));
-	}
-
-	private extractDescriptionFromHTML(html: string): string {
-		// Try multiple methods to extract description
-		const methods = [
-			// Meta description
-			/<meta[^>]+name=['"]description['"][^>]+content=['"]([^'"]+)['"]/i,
-			// Open Graph description
-			/<meta[^>]+property=['"]og:description['"][^>]+content=['"]([^'"]+)['"]/i,
-			// Twitter description
-			/<meta[^>]+name=['"]twitter:description['"][^>]+content=['"]([^'"]+)['"]/i,
-			// JSON-LD structured data
-			/"description":\s*"([^"]+)"/i
-		];
-
-		for (const method of methods) {
-			const match = html.match(method);
-			if (match && match[1]) {
-				return match[1].trim();
+			
+			// Check for specific error messages
+			if (errorMessage.includes('private') || 
+				errorMessage.includes('not available') || 
+				errorMessage.includes('access denied') ||
+				errorMessage.includes('restricted')) {
+				return true;
 			}
 		}
-
-		return 'TikTok Slideshow';
-	}
-
-	private extractHashtagsFromHTML(html: string): string[] {
-		// Extract hashtags from various sources in HTML
-		const hashtagPattern = /#[\w\u00c0-\u024f\u1e00-\u1eff]+/gi;
-		const matches = html.match(hashtagPattern) || [];
 		
-		// Deduplicate and clean up
-		const uniqueHashtags = [...new Set(matches)];
-		return uniqueHashtags.slice(0, 20); // Limit to 20 hashtags
+		// Also check the response status from fetch error
+		if (error && error.status === 403) {
+			return true;
+		}
+		
+		return false;
 	}
 
-	private generateSlideshowEmbed(url: string, videoId: string | null, description?: string): string {
+	private async handlePrivateVideo(url: string, videoId: string | null, isBulkProcessing: boolean): Promise<any> {
 		const author = this.extractAuthorFromUrl(url);
+		const postedDate = await this.extractTikTokPostedDate(url, videoId);
 		
-		return `<div class="tiktok-slideshow-embed" style="border: 1px solid var(--background-modifier-border); border-radius: 8px; padding: 16px; margin: 16px 0;">
-	<div style="display: flex; align-items: center; margin-bottom: 12px;">
-		<span style="font-size: 1.2em; margin-right: 8px;">📸</span>
-		<div>
-			<strong>${author}</strong>
-			<div style="font-size: 0.9em; opacity: 0.7;">TikTok Slideshow</div>
-		</div>
-	</div>
-	${description ? `<p style="margin-bottom: 12px;">${description}</p>` : ''}
-	<div style="background: var(--background-secondary); border-radius: 6px; padding: 12px; text-align: center;">
-		<span style="font-size: 2em; margin-bottom: 8px; display: block;">🖼️</span>
-		<p style="margin: 0; font-size: 0.9em;">Image slideshow content</p>
-		<a href="${url}" target="_blank" style="font-size: 0.8em; opacity: 0.7;">View on TikTok</a>
-	</div>
-</div>`;
+		switch (this.settings.handlePrivateVideos) {
+			case 'skip':
+				// Return null to indicate this should be skipped
+				return null;
+				
+			case 'show-error':
+				if (!isBulkProcessing) {
+					new Notice(`Cannot access private TikTok video: ${url}`, 5000);
+				}
+				// Still create a note but with error information
+				return {
+					author: author,
+					description: 'Private TikTok Video - Access Denied',
+					hashtags: [],
+					url: url,
+					expandedUrl: url,
+					embedHtml: `<p><strong>⚠️ Private Video</strong></p><p>This TikTok video is private and cannot be accessed.</p><p>Original URL: <a href="${url}" target="_blank">${url}</a></p>`,
+					videoId: videoId,
+					createdDate: new Date().toISOString().split('T')[0],
+					postedDate: postedDate,
+					oembedFailed: true,
+					isPrivate: true
+				};
+				
+			case 'create-empty':
+			default:
+				// Create a minimal note with just the URL and basic info
+				return {
+					author: author,
+					description: 'Private TikTok Video',
+					hashtags: [],
+					url: url,
+					expandedUrl: url,
+					embedHtml: `<p>TikTok video (private): <a href="${url}" target="_blank">${url}</a></p>`,
+					videoId: videoId,
+					createdDate: new Date().toISOString().split('T')[0],
+					postedDate: postedDate,
+					oembedFailed: true,
+					isPrivate: true
+				};
+		}
 	}
 
 	private async extractTikTokPostedDate(url: string, videoId: string | null): Promise<string> {
@@ -611,7 +604,7 @@ export default class TikTokerPlugin extends Plugin {
 			modal.open();
 		}
 
-		const results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string; oembedFailed?: boolean; isSlideshow?: boolean }[] = [];
+		const results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string; oembedFailed?: boolean; isSlideshow?: boolean; isPrivate?: boolean }[] = [];
 		const processingQueue = [...urls];
 		let processed = 0;
 
@@ -630,7 +623,7 @@ export default class TikTokerPlugin extends Plugin {
 				const result = await Promise.race([
 					processUrlPromise,
 					timeoutPromise
-				]) as {success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean, isSlideshow?: boolean};
+				]) as {success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean, isSlideshow?: boolean, isPrivate?: boolean};
 
 				results.push({ 
 					url, 
@@ -639,7 +632,8 @@ export default class TikTokerPlugin extends Plugin {
 					fileName: result.fileName,
 					noteTitle: result.noteTitle,
 					oembedFailed: result.oembedFailed,
-					isSlideshow: result.isSlideshow
+					isSlideshow: result.isSlideshow,
+					isPrivate: result.isPrivate
 				});
 				processed++;
 				
@@ -659,24 +653,35 @@ export default class TikTokerPlugin extends Plugin {
 		this.showBulkProcessingResults(results);
 	}
 
-	private async processTikTokUrlBulk(url: string): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean, isSlideshow?: boolean}> {
+	private async processTikTokUrlBulk(url: string): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean, isSlideshow?: boolean, isPrivate?: boolean}> {
 		try {
 			const expandedUrl = await this.expandUrl(url);
 			const tikTokData = await this.fetchTikTokData(expandedUrl, true);
+			
+			// Handle case where private video should be skipped
+			if (tikTokData === null) {
+				return {
+					success: false,
+					isPrivate: true
+				};
+			}
+			
 			const result = await this.createTikTokNote(tikTokData, true);
 			return {
 				...result,
 				oembedFailed: tikTokData.oembedFailed,
-				isSlideshow: tikTokData.isSlideshow
+				isSlideshow: tikTokData.isSlideshow,
+				isPrivate: tikTokData.isPrivate
 			};
 		} catch (error) {
 			throw error;
 		}
 	}
 
-	private showBulkProcessingResults(results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string; oembedFailed?: boolean; isSlideshow?: boolean }[]) {
+	private showBulkProcessingResults(results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string; oembedFailed?: boolean; isSlideshow?: boolean; isPrivate?: boolean }[]) {
 		const successful = results.filter(r => r.success);
-		const failed = results.filter(r => !r.success && !r.duplicate);
+		const failed = results.filter(r => !r.success && !r.duplicate && !r.isPrivate);
+		const skippedPrivate = results.filter(r => r.isPrivate);
 		const duplicates = results.filter(r => r.duplicate);
 		const oembedFailed = results.filter(r => r.success && r.oembedFailed && !r.isSlideshow);
 		const slideshows = results.filter(r => r.success && r.isSlideshow);
@@ -687,13 +692,14 @@ export default class TikTokerPlugin extends Plugin {
 		if (duplicates.length > 0) summaryParts.push(`⚠️ Duplicates: ${duplicates.length}`);
 		if (slideshows.length > 0) summaryParts.push(`📸 Slideshows: ${slideshows.length}`);
 		if (oembedFailed.length > 0) summaryParts.push(`🔄 Fallback: ${oembedFailed.length}`);
+		if (skippedPrivate.length > 0) summaryParts.push(`🔒 Private: ${skippedPrivate.length}`);
 		if (failed.length > 0) summaryParts.push(`❌ Failed: ${failed.length}`);
 		
 		new Notice(summaryParts.join(' • '));
 
-		// Show detailed modal if there are duplicates, failures, slideshows, or oEmbed fallbacks
-		if (duplicates.length > 0 || failed.length > 0 || oembedFailed.length > 0 || slideshows.length > 0) {
-			const modal = new BulkResultsModal(this.app, successful, failed, duplicates, oembedFailed, slideshows, (failedUrls) => {
+		// Show detailed modal if there are duplicates, failures, slideshows, private videos, or oEmbed fallbacks
+		if (duplicates.length > 0 || failed.length > 0 || oembedFailed.length > 0 || slideshows.length > 0 || skippedPrivate.length > 0) {
+			const modal = new BulkResultsModal(this.app, successful, failed, duplicates, oembedFailed, slideshows, skippedPrivate, (failedUrls) => {
 				// Add a delay before retrying
 				setTimeout(() => {
 					this.processBulkTikToks(failedUrls);
@@ -1206,15 +1212,17 @@ class BulkResultsModal extends Modal {
 	duplicates: { url: string; duplicate: boolean; fileName?: string; noteTitle?: string }[];
 	oembedFailed: { url: string; success: boolean; oembedFailed: boolean; fileName?: string; noteTitle?: string }[];
 	slideshows: { url: string; success: boolean; isSlideshow: boolean; fileName?: string; noteTitle?: string }[];
+	skippedPrivate: { url: string; isPrivate: boolean }[];
 	onRetry: (failedUrls: string[]) => void;
 
-	constructor(app: App, successful: any[], failed: any[], duplicates: any[], oembedFailed: any[], slideshows: any[], onRetry: (failedUrls: string[]) => void) {
+	constructor(app: App, successful: any[], failed: any[], duplicates: any[], oembedFailed: any[], slideshows: any[], skippedPrivate: any[], onRetry: (failedUrls: string[]) => void) {
 		super(app);
 		this.successful = successful;
 		this.failed = failed;
 		this.duplicates = duplicates;
 		this.oembedFailed = oembedFailed;
 		this.slideshows = slideshows;
+		this.skippedPrivate = skippedPrivate;
 		this.onRetry = onRetry;
 	}
 
@@ -1236,6 +1244,9 @@ class BulkResultsModal extends Modal {
 		}
 		if (this.oembedFailed.length > 0) {
 			summary.createEl('p', {text: `🔄 Used fallback embed: ${this.oembedFailed.length}`});
+		}
+		if (this.skippedPrivate.length > 0) {
+			summary.createEl('p', {text: `🔒 Private videos skipped: ${this.skippedPrivate.length}`});
 		}
 		summary.createEl('p', {text: `❌ Failed to process: ${this.failed.length}`});
 
@@ -1338,6 +1349,37 @@ class BulkResultsModal extends Modal {
 				content.createEl('div', {
 					text: item.url,
 					cls: 'slideshow-url'
+				}).style.fontSize = '0.8em';
+				content.style.opacity = '0.9';
+			});
+		}
+
+		// Show private videos section
+		if (this.skippedPrivate.length > 0) {
+			contentEl.createEl('h3', {text: 'Private Videos Skipped:'});
+			
+			const privateContainer = contentEl.createDiv({cls: 'private-urls'});
+			privateContainer.style.maxHeight = '200px';
+			privateContainer.style.overflowY = 'auto';
+			privateContainer.style.border = '1px solid var(--background-modifier-border)';
+			privateContainer.style.padding = '10px';
+			privateContainer.style.marginBottom = '15px';
+			privateContainer.style.backgroundColor = 'var(--background-secondary)';
+
+			this.skippedPrivate.forEach(item => {
+				const privateItem = privateContainer.createDiv({cls: 'private-item'});
+				privateItem.style.marginBottom = '8px';
+				privateItem.style.display = 'flex';
+				privateItem.style.alignItems = 'center';
+
+				const icon = privateItem.createSpan({text: '🔒'});
+				icon.style.marginRight = '8px';
+
+				const content = privateItem.createDiv();
+				content.createEl('a', {
+					href: item.url,
+					text: item.url,
+					cls: 'private-url'
 				}).style.fontSize = '0.8em';
 				content.style.opacity = '0.9';
 			});
