@@ -174,6 +174,8 @@ export default class TikTokerPlugin extends Plugin {
 			const workingEmbed = this.createObsidianCompatibleEmbed(oembedData, finalVideoId, url);
 			console.log('TikToker Debug - Created Obsidian-compatible embed');
 			
+			const postedDate = await this.extractTikTokPostedDate(url, finalVideoId);
+			
 			return {
 				author: oembedData.author_name || 'Unknown',
 				description: oembedData.title || 'TikTok Video',
@@ -183,7 +185,8 @@ export default class TikTokerPlugin extends Plugin {
 				embedHtml: workingEmbed,
 				thumbnailUrl: oembedData.thumbnail_url,
 				videoId: finalVideoId,
-				date: new Date().toISOString().split('T')[0],
+				createdDate: new Date().toISOString().split('T')[0], // When we saved it
+				postedDate: postedDate, // When TikTok was originally posted
 				oembedFailed: false
 			};
 		} catch (error) {
@@ -192,18 +195,186 @@ export default class TikTokerPlugin extends Plugin {
 				new Notice('oEmbed failed, using fallback embed method');
 			}
 			
+			const postedDate = await this.extractTikTokPostedDate(url, videoId);
+			
+			// Try to detect if this is a slideshow post
+			const slideshowData = await this.detectAndHandleSlideshow(url, videoId);
+			
 			return {
 				author: this.extractAuthorFromUrl(url),
-				description: 'TikTok Video',
-				hashtags: [],
+				description: slideshowData.description || 'TikTok Post',
+				hashtags: slideshowData.hashtags || [],
 				url: url,
 				expandedUrl: url,
-				embedHtml: this.generateWorkingEmbed(videoId, url),
+				embedHtml: slideshowData.embedHtml || this.generateWorkingEmbed(videoId, url),
 				videoId: videoId,
-				date: new Date().toISOString().split('T')[0],
-				oembedFailed: true
+				createdDate: new Date().toISOString().split('T')[0], // When we saved it
+				postedDate: postedDate, // When TikTok was originally posted
+				oembedFailed: true,
+				isSlideshow: slideshowData.isSlideshow
 			};
 		}
+	}
+
+	private async detectAndHandleSlideshow(url: string, videoId: string | null): Promise<{
+		isSlideshow: boolean;
+		description?: string;
+		hashtags?: string[];
+		embedHtml?: string;
+	}> {
+		try {
+			// Attempt to fetch page content to detect slideshow
+			const controller = new AbortController();
+			setTimeout(() => controller.abort(), 8000); // 8 second timeout
+			
+			const response = await fetch(url, {
+				signal: controller.signal,
+				headers: {
+					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+				}
+			});
+
+			if (response.ok) {
+				const html = await response.text();
+				
+				// Look for indicators of slideshow content
+				const isSlideshow = this.detectSlideshowFromHTML(html);
+				
+				if (isSlideshow) {
+					console.log('TikToker: Detected slideshow post');
+					
+					// Extract metadata from HTML
+					const description = this.extractDescriptionFromHTML(html);
+					const hashtags = this.extractHashtagsFromHTML(html);
+					
+					// Generate slideshow-specific embed
+					const embedHtml = this.generateSlideshowEmbed(url, videoId, description);
+					
+					return {
+						isSlideshow: true,
+						description: description || 'TikTok Slideshow',
+						hashtags: hashtags,
+						embedHtml: embedHtml
+					};
+				}
+			}
+		} catch (error) {
+			console.log('TikToker: Could not fetch slideshow data:', error);
+		}
+
+		return { isSlideshow: false };
+	}
+
+	private detectSlideshowFromHTML(html: string): boolean {
+		// Look for indicators that this is a slideshow post
+		const slideshowIndicators = [
+			/imagePost/i,
+			/carousel/i,
+			/slideshow/i,
+			/"itemListElement".*"@type".*"ImageObject"/s,
+			/data-e2e="image-card"/i,
+			/"contentUrl".*\.jpg|\.jpeg|\.png/i
+		];
+		
+		return slideshowIndicators.some(pattern => pattern.test(html));
+	}
+
+	private extractDescriptionFromHTML(html: string): string {
+		// Try multiple methods to extract description
+		const methods = [
+			// Meta description
+			/<meta[^>]+name=['"]description['"][^>]+content=['"]([^'"]+)['"]/i,
+			// Open Graph description
+			/<meta[^>]+property=['"]og:description['"][^>]+content=['"]([^'"]+)['"]/i,
+			// Twitter description
+			/<meta[^>]+name=['"]twitter:description['"][^>]+content=['"]([^'"]+)['"]/i,
+			// JSON-LD structured data
+			/"description":\s*"([^"]+)"/i
+		];
+
+		for (const method of methods) {
+			const match = html.match(method);
+			if (match && match[1]) {
+				return match[1].trim();
+			}
+		}
+
+		return 'TikTok Slideshow';
+	}
+
+	private extractHashtagsFromHTML(html: string): string[] {
+		// Extract hashtags from various sources in HTML
+		const hashtagPattern = /#[\w\u00c0-\u024f\u1e00-\u1eff]+/gi;
+		const matches = html.match(hashtagPattern) || [];
+		
+		// Deduplicate and clean up
+		const uniqueHashtags = [...new Set(matches)];
+		return uniqueHashtags.slice(0, 20); // Limit to 20 hashtags
+	}
+
+	private generateSlideshowEmbed(url: string, videoId: string | null, description?: string): string {
+		const author = this.extractAuthorFromUrl(url);
+		
+		return `<div class="tiktok-slideshow-embed" style="border: 1px solid var(--background-modifier-border); border-radius: 8px; padding: 16px; margin: 16px 0;">
+	<div style="display: flex; align-items: center; margin-bottom: 12px;">
+		<span style="font-size: 1.2em; margin-right: 8px;">📸</span>
+		<div>
+			<strong>${author}</strong>
+			<div style="font-size: 0.9em; opacity: 0.7;">TikTok Slideshow</div>
+		</div>
+	</div>
+	${description ? `<p style="margin-bottom: 12px;">${description}</p>` : ''}
+	<div style="background: var(--background-secondary); border-radius: 6px; padding: 12px; text-align: center;">
+		<span style="font-size: 2em; margin-bottom: 8px; display: block;">🖼️</span>
+		<p style="margin: 0; font-size: 0.9em;">Image slideshow content</p>
+		<a href="${url}" target="_blank" style="font-size: 0.8em; opacity: 0.7;">View on TikTok</a>
+	</div>
+</div>`;
+	}
+
+	private async extractTikTokPostedDate(url: string, videoId: string | null): Promise<string> {
+		try {
+			// TikTok video IDs are usually 19-digit numbers that contain timestamp info
+			if (videoId && videoId.length >= 19) {
+				// The first part of TikTok video ID often contains timestamp (Unix time in milliseconds)
+				// Extract the first 10 digits and convert from timestamp
+				const timestampStr = videoId.substring(0, 10);
+				const timestamp = parseInt(timestampStr);
+				
+				if (timestamp > 1000000000 && timestamp < 9999999999) { // Reasonable timestamp range
+					const date = new Date(timestamp * 1000);
+					return date.toISOString().split('T')[0];
+				}
+			}
+			
+			// Fallback: try to fetch page content to extract date (more complex)
+			try {
+				const controller = new AbortController();
+				setTimeout(() => controller.abort(), 5000); // 5 second timeout
+				
+				const response = await fetch(url, {
+					method: 'HEAD',
+					signal: controller.signal,
+					headers: {
+						'User-Agent': 'Mozilla/5.0 (compatible; TikToker-Plugin/1.0)'
+					}
+				});
+				
+				// Check if response has last-modified date
+				const lastModified = response.headers.get('last-modified');
+				if (lastModified) {
+					const date = new Date(lastModified);
+					return date.toISOString().split('T')[0];
+				}
+			} catch (fetchError) {
+				console.log('TikToker: Could not fetch posted date via HEAD request:', fetchError);
+			}
+		} catch (error) {
+			console.log('TikToker: Error extracting posted date:', error);
+		}
+		
+		// Fallback to current date if we can't determine posted date
+		return new Date().toISOString().split('T')[0];
 	}
 
 	private extractAuthorFromUrl(url: string): string {
@@ -336,7 +507,7 @@ export default class TikTokerPlugin extends Plugin {
 	private generateFileName(data: any): string {
 		return this.settings.fileNamingPattern
 			.replace(/{{author}}/g, (data.author || 'unknown').replace(/[@#]/g, ''))
-			.replace(/{{date}}/g, data.date || new Date().toISOString().split('T')[0])
+			.replace(/{{date}}/g, data.createdDate || data.date || new Date().toISOString().split('T')[0])
 			.replace(/{{videoId}}/g, data.videoId || 'unknown')
 			.replace(/{{description}}/g, (data.description || 'TikTok Video').substring(0, 100).replace(/[^\w\s-]/g, '').trim())
 			.replace(/{{title}}/g, (data.description || 'tiktok').substring(0, 50).replace(/[^\w\s-]/g, ''));
@@ -344,7 +515,7 @@ export default class TikTokerPlugin extends Plugin {
 
 	private generateNoteTitle(data: any): string {
 		return this.settings.noteTitleTemplate
-			.replace(/{{date}}/g, data.date || new Date().toISOString().split('T')[0])
+			.replace(/{{date}}/g, data.createdDate || data.date || new Date().toISOString().split('T')[0])
 			.replace(/{{description}}/g, data.description || 'Unknown')
 			.replace(/{{author}}/g, data.author || 'Unknown');
 	}
@@ -355,7 +526,13 @@ export default class TikTokerPlugin extends Plugin {
 		if (this.settings.enableProperties) {
 			content += '---\n';
 			if (this.settings.includeAuthor) content += `author: ${data.author}\n`;
-			if (this.settings.includeDateCreated) content += `created: ${data.date}\n`;
+			if (this.settings.includeDateCreated) {
+				content += `created: ${data.createdDate || data.date || new Date().toISOString().split('T')[0]}\n`;
+			}
+			// Add TikTok posted date
+			if (data.postedDate && data.postedDate !== (data.createdDate || data.date)) {
+				content += `posted: ${data.postedDate}\n`;
+			}
 			if (this.settings.includeUrl) content += `url: ${data.url}\n`;
 			if (this.settings.includeExpandedUrl && data.expandedUrl && data.expandedUrl !== data.url) {
 				content += `expanded_url: ${data.expandedUrl}\n`;
@@ -393,7 +570,7 @@ export default class TikTokerPlugin extends Plugin {
 			modal.open();
 		}
 
-		const results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string; oembedFailed?: boolean }[] = [];
+		const results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string; oembedFailed?: boolean; isSlideshow?: boolean }[] = [];
 		const processingQueue = [...urls];
 		let processed = 0;
 
@@ -412,7 +589,7 @@ export default class TikTokerPlugin extends Plugin {
 				const result = await Promise.race([
 					processUrlPromise,
 					timeoutPromise
-				]) as {success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean};
+				]) as {success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean, isSlideshow?: boolean};
 
 				results.push({ 
 					url, 
@@ -420,7 +597,8 @@ export default class TikTokerPlugin extends Plugin {
 					duplicate: result.duplicate,
 					fileName: result.fileName,
 					noteTitle: result.noteTitle,
-					oembedFailed: result.oembedFailed
+					oembedFailed: result.oembedFailed,
+					isSlideshow: result.isSlideshow
 				});
 				processed++;
 				
@@ -440,38 +618,41 @@ export default class TikTokerPlugin extends Plugin {
 		this.showBulkProcessingResults(results);
 	}
 
-	private async processTikTokUrlBulk(url: string): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean}> {
+	private async processTikTokUrlBulk(url: string): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean, isSlideshow?: boolean}> {
 		try {
 			const expandedUrl = await this.expandUrl(url);
 			const tikTokData = await this.fetchTikTokData(expandedUrl, true);
 			const result = await this.createTikTokNote(tikTokData, true);
 			return {
 				...result,
-				oembedFailed: tikTokData.oembedFailed
+				oembedFailed: tikTokData.oembedFailed,
+				isSlideshow: tikTokData.isSlideshow
 			};
 		} catch (error) {
 			throw error;
 		}
 	}
 
-	private showBulkProcessingResults(results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string; oembedFailed?: boolean }[]) {
+	private showBulkProcessingResults(results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string; oembedFailed?: boolean; isSlideshow?: boolean }[]) {
 		const successful = results.filter(r => r.success);
 		const failed = results.filter(r => !r.success && !r.duplicate);
 		const duplicates = results.filter(r => r.duplicate);
-		const oembedFailed = results.filter(r => r.success && r.oembedFailed);
+		const oembedFailed = results.filter(r => r.success && r.oembedFailed && !r.isSlideshow);
+		const slideshows = results.filter(r => r.success && r.isSlideshow);
 
 		// Show single summary notice instead of multiple toasts
 		const summaryParts = [];
 		if (successful.length > 0) summaryParts.push(`✅ Created: ${successful.length}`);
 		if (duplicates.length > 0) summaryParts.push(`⚠️ Duplicates: ${duplicates.length}`);
+		if (slideshows.length > 0) summaryParts.push(`📸 Slideshows: ${slideshows.length}`);
 		if (oembedFailed.length > 0) summaryParts.push(`🔄 Fallback: ${oembedFailed.length}`);
 		if (failed.length > 0) summaryParts.push(`❌ Failed: ${failed.length}`);
 		
 		new Notice(summaryParts.join(' • '));
 
-		// Show detailed modal if there are duplicates, failures, or oEmbed fallbacks
-		if (duplicates.length > 0 || failed.length > 0 || oembedFailed.length > 0) {
-			const modal = new BulkResultsModal(this.app, successful, failed, duplicates, oembedFailed, (failedUrls) => {
+		// Show detailed modal if there are duplicates, failures, slideshows, or oEmbed fallbacks
+		if (duplicates.length > 0 || failed.length > 0 || oembedFailed.length > 0 || slideshows.length > 0) {
+			const modal = new BulkResultsModal(this.app, successful, failed, duplicates, oembedFailed, slideshows, (failedUrls) => {
 				// Add a delay before retrying
 				setTimeout(() => {
 					this.processBulkTikToks(failedUrls);
@@ -900,6 +1081,25 @@ class BulkProgressModal extends Modal {
 		this.minimalToast.style.zIndex = '1000';
 		this.minimalToast.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
 		this.minimalToast.style.minWidth = '200px';
+		this.minimalToast.style.cursor = 'pointer';
+		this.minimalToast.style.transition = 'transform 0.2s ease';
+
+		// Add hover effect
+		this.minimalToast.onmouseenter = () => {
+			this.minimalToast!.style.transform = 'scale(1.02)';
+		};
+		this.minimalToast.onmouseleave = () => {
+			this.minimalToast!.style.transform = 'scale(1)';
+		};
+
+		// Make clickable to reopen modal
+		this.minimalToast.onclick = () => {
+			if (this.minimalToast) {
+				this.minimalToast.remove();
+				this.minimalToast = null;
+			}
+			this.open(); // Reopen the progress modal
+		};
 
 		const progressText = this.minimalToast.createDiv();
 		progressText.textContent = `Processing TikToks: ${this.current} / ${this.total}`;
@@ -964,14 +1164,16 @@ class BulkResultsModal extends Modal {
 	failed: { url: string; success: boolean; error?: string }[];
 	duplicates: { url: string; duplicate: boolean; fileName?: string; noteTitle?: string }[];
 	oembedFailed: { url: string; success: boolean; oembedFailed: boolean; fileName?: string; noteTitle?: string }[];
+	slideshows: { url: string; success: boolean; isSlideshow: boolean; fileName?: string; noteTitle?: string }[];
 	onRetry: (failedUrls: string[]) => void;
 
-	constructor(app: App, successful: any[], failed: any[], duplicates: any[], oembedFailed: any[], onRetry: (failedUrls: string[]) => void) {
+	constructor(app: App, successful: any[], failed: any[], duplicates: any[], oembedFailed: any[], slideshows: any[], onRetry: (failedUrls: string[]) => void) {
 		super(app);
 		this.successful = successful;
 		this.failed = failed;
 		this.duplicates = duplicates;
 		this.oembedFailed = oembedFailed;
+		this.slideshows = slideshows;
 		this.onRetry = onRetry;
 	}
 
@@ -987,6 +1189,9 @@ class BulkResultsModal extends Modal {
 		summary.createEl('p', {text: `✅ Successfully processed: ${this.successful.length}`});
 		if (this.duplicates.length > 0) {
 			summary.createEl('p', {text: `⚠️ Duplicate files skipped: ${this.duplicates.length}`});
+		}
+		if (this.slideshows.length > 0) {
+			summary.createEl('p', {text: `📸 Image slideshows: ${this.slideshows.length}`});
 		}
 		if (this.oembedFailed.length > 0) {
 			summary.createEl('p', {text: `🔄 Used fallback embed: ${this.oembedFailed.length}`});
@@ -1009,19 +1214,33 @@ class BulkResultsModal extends Modal {
 				const duplicateItem = duplicatesContainer.createDiv({cls: 'duplicate-item'});
 				duplicateItem.style.marginBottom = '12px';
 				duplicateItem.style.display = 'flex';
-				duplicateItem.style.justifyContent = 'space-between';
-				duplicateItem.style.alignItems = 'center';
+				duplicateItem.style.alignItems = 'flex-start';
+				duplicateItem.style.gap = '12px';
 				
 				const content = duplicateItem.createDiv();
-				content.createEl('div', {text: `${item.noteTitle || item.fileName}`});
-				content.createEl('div', {
+				content.style.flex = '1';
+				content.style.minWidth = '0'; // Allow text to wrap
+				content.style.maxWidth = '60%'; // Limit content width
+				
+				const titleDiv = content.createEl('div', {text: `${item.noteTitle || item.fileName}`});
+				titleDiv.style.wordWrap = 'break-word';
+				titleDiv.style.wordBreak = 'break-word';
+				titleDiv.style.marginBottom = '4px';
+				
+				const urlDiv = content.createEl('div', {
 					text: item.url,
 					cls: 'duplicate-url'
-				}).style.fontSize = '0.8em';
+				});
+				urlDiv.style.fontSize = '0.8em';
+				urlDiv.style.wordWrap = 'break-word';
+				urlDiv.style.wordBreak = 'break-all';
+				urlDiv.style.opacity = '0.7';
 				
 				const buttonContainer = duplicateItem.createDiv();
 				buttonContainer.style.display = 'flex';
-				buttonContainer.style.gap = '5px';
+				buttonContainer.style.flexDirection = 'column';
+				buttonContainer.style.gap = '4px';
+				buttonContainer.style.flexShrink = '0';
 				
 				const replaceBtn = buttonContainer.createEl('button', {text: 'Replace', cls: 'duplicate-btn'});
 				replaceBtn.style.padding = '4px 8px';
@@ -1050,6 +1269,37 @@ class BulkResultsModal extends Modal {
 			
 			const bulkDuplicateBtn = bulkDuplicateActions.createEl('button', {text: 'Create All as Duplicates'});
 			bulkDuplicateBtn.onclick = () => this.handleBulkDuplicateAction('duplicate');
+		}
+
+		// Show slideshow section
+		if (this.slideshows.length > 0) {
+			contentEl.createEl('h3', {text: 'Image Slideshow Posts:'});
+			
+			const slideshowContainer = contentEl.createDiv({cls: 'slideshow-urls'});
+			slideshowContainer.style.maxHeight = '200px';
+			slideshowContainer.style.overflowY = 'auto';
+			slideshowContainer.style.border = '1px solid var(--background-modifier-border)';
+			slideshowContainer.style.padding = '10px';
+			slideshowContainer.style.marginBottom = '15px';
+			slideshowContainer.style.backgroundColor = 'var(--background-secondary)';
+
+			this.slideshows.forEach(item => {
+				const slideshowItem = slideshowContainer.createDiv({cls: 'slideshow-item'});
+				slideshowItem.style.marginBottom = '8px';
+				slideshowItem.style.display = 'flex';
+				slideshowItem.style.alignItems = 'center';
+				
+				const icon = slideshowItem.createSpan({text: '📸'});
+				icon.style.marginRight = '8px';
+				
+				const content = slideshowItem.createDiv();
+				content.createEl('div', {text: `${item.noteTitle || item.fileName}`});
+				content.createEl('div', {
+					text: item.url,
+					cls: 'slideshow-url'
+				}).style.fontSize = '0.8em';
+				content.style.opacity = '0.9';
+			});
 		}
 
 		// Show oEmbed fallback section
