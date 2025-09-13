@@ -1,4 +1,8 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile } from 'obsidian';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import * as path from 'path';
+import * as fs from 'fs';
 
 interface TikTokerSettings {
 	outputFolder: string;
@@ -12,7 +16,10 @@ interface TikTokerSettings {
 	includeExpandedUrl: boolean;
 	includeTagsFromHashtags: boolean;
 	customProperties: string;
-	transcriptionApi: 'none' | 'whisper' | 'assemblyai';
+	transcriptionApi: 'none' | 'whisper-local' | 'assemblyai';
+	whisperScriptPath: string;
+	whisperModel: 'tiny' | 'base' | 'small' | 'medium' | 'large';
+	whisperBrowser: 'chrome' | 'safari';
 	apiKey: string;
 	handlePrivateVideos: 'create-empty' | 'skip' | 'show-error';
 	duplicateFileHandling: 'replace' | 'duplicate' | 'skip';
@@ -37,6 +44,9 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	includeTagsFromHashtags: true,
 	customProperties: '',
 	transcriptionApi: 'none',
+	whisperScriptPath: '/Users/amey/Documents/projects/tiktok-test-transcription/tiktok2text.sh',
+	whisperModel: 'base',
+	whisperBrowser: 'chrome',
 	apiKey: '',
 	handlePrivateVideos: 'create-empty',
 	duplicateFileHandling: 'replace',
@@ -50,6 +60,7 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 
 export default class TikTokerPlugin extends Plugin {
 	settings: TikTokerSettings;
+	activeTranscriptionModal: SingleTranscriptionModal | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -201,6 +212,7 @@ export default class TikTokerPlugin extends Plugin {
 				videoId: finalVideoId,
 				createdDate: new Date().toISOString().split('T')[0], // When we saved it
 				postedDate: postedDate, // When TikTok was originally posted
+				transcription: '', // Will be filled asynchronously
 				oembedFailed: false
 			};
 		} catch (error) {
@@ -226,6 +238,7 @@ export default class TikTokerPlugin extends Plugin {
 			if (isSlideshow) {
 				// For photo slideshows, use simple markdown image format
 				const title = `TikTok photo slideshow by ${authorWithAt}`;
+				// Slideshows don't have audio, so skip transcription
 				return {
 					author: author,
 					description: 'TikTok Photo Slideshow',
@@ -236,6 +249,7 @@ export default class TikTokerPlugin extends Plugin {
 					videoId: videoId,
 					createdDate: new Date().toISOString().split('T')[0],
 					postedDate: postedDate,
+					transcription: '', // No audio in slideshows
 					oembedFailed: true,
 					isSlideshow: true
 				};
@@ -251,6 +265,7 @@ export default class TikTokerPlugin extends Plugin {
 					videoId: videoId,
 					createdDate: new Date().toISOString().split('T')[0],
 					postedDate: postedDate,
+					transcription: '', // Will be filled asynchronously
 					oembedFailed: true,
 					isSlideshow: false
 				};
@@ -308,6 +323,7 @@ export default class TikTokerPlugin extends Plugin {
 			videoId: videoId,
 			createdDate: new Date().toISOString().split('T')[0],
 			postedDate: postedDate,
+			transcription: '', // Will be filled asynchronously
 			oembedFailed: true // Mark as oEmbed failed since we skipped it
 		};
 	}
@@ -334,6 +350,7 @@ export default class TikTokerPlugin extends Plugin {
 			videoId: videoId,
 			createdDate: new Date().toISOString().split('T')[0],
 			postedDate: postedDate,
+			transcription: '', // No audio in slideshows
 			oembedFailed: false,
 			isSlideshow: true
 		};
@@ -393,6 +410,7 @@ export default class TikTokerPlugin extends Plugin {
 					videoId: videoId,
 					createdDate: new Date().toISOString().split('T')[0],
 					postedDate: postedDate,
+					transcription: '', // Cannot transcribe private videos
 					oembedFailed: true,
 					isPrivate: true
 				};
@@ -410,6 +428,7 @@ export default class TikTokerPlugin extends Plugin {
 					videoId: videoId,
 					createdDate: new Date().toISOString().split('T')[0],
 					postedDate: postedDate,
+					transcription: '', // Cannot transcribe private videos
 					oembedFailed: true,
 					isPrivate: true
 				};
@@ -650,6 +669,16 @@ export default class TikTokerPlugin extends Plugin {
 				await this.app.vault.create(filePath, noteContent);
 				if (!isBulkProcessing) new Notice(`Created: ${noteTitle}`);
 			}
+
+			// Start transcription asynchronously if enabled and not a slideshow
+			if (this.settings.transcriptionApi !== 'none' && !data.isSlideshow && !data.isPrivate) {
+				if (!isBulkProcessing) {
+					// For single TikTok, show integrated modal with transcription
+					this.showSingleTranscriptionModal(data.url, data.videoId, filePath, data);
+				}
+				// For bulk processing, transcription will be handled separately with progress tracking
+			}
+
 			return { success: true, fileName, noteTitle };
 		} catch (error) {
 			if (!isBulkProcessing) new Notice('Failed to create note');
@@ -730,11 +759,20 @@ export default class TikTokerPlugin extends Plugin {
 			cleanDescription = cleanDescription.replace(/\s+/g, ' ').trim();
 		}
 
+		// For async transcription, leave placeholder if transcription is empty
+		let transcriptionContent = '';
+		if (data.transcription && data.transcription.trim()) {
+			transcriptionContent = `## Transcription\n\n${data.transcription.trim()}`;
+		} else if (this.settings.transcriptionApi !== 'none' && !data.isSlideshow && !data.isPrivate) {
+			// Leave placeholder for async transcription update
+			transcriptionContent = '{{transcription}}';
+		}
+
 		return content + this.settings.noteContentTemplate
 			.replace(/{{iframe}}/g, embedHtml)
 			.replace(/{{description}}/g, cleanDescription)
 			.replace(/{{hashtags}}/g, hashtags)
-			.replace(/{{transcription}}/g, '');
+			.replace(/{{transcription}}/g, transcriptionContent);
 	}
 
 	private async processBulkTikToks(urls: string[]) {
@@ -748,6 +786,9 @@ export default class TikTokerPlugin extends Plugin {
 		const results: { url: string; success: boolean; error?: string; duplicate?: boolean; fileName?: string; noteTitle?: string; oembedFailed?: boolean; isSlideshow?: boolean; isPrivate?: boolean }[] = [];
 		const processingQueue = [...urls];
 		let processed = 0;
+
+		// Start transcription tracking after all files are created
+		const transcriptionTasks: Promise<void>[] = [];
 
 		while (processingQueue.length > 0) {
 			const url = processingQueue.shift()!;
@@ -764,7 +805,7 @@ export default class TikTokerPlugin extends Plugin {
 				const result = await Promise.race([
 					processUrlPromise,
 					timeoutPromise
-				]) as {success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean, isSlideshow?: boolean, isPrivate?: boolean};
+				]) as {success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean, isSlideshow?: boolean, isPrivate?: boolean, filePath?: string, data?: any};
 
 				results.push({ 
 					url, 
@@ -776,6 +817,31 @@ export default class TikTokerPlugin extends Plugin {
 					isSlideshow: result.isSlideshow,
 					isPrivate: result.isPrivate
 				});
+
+				// Start transcription if applicable
+				if (result.success && result.filePath && result.data && 
+					this.settings.transcriptionApi !== 'none' && 
+					!result.data.isSlideshow && !result.data.isPrivate) {
+					
+					modal.updateTranscriptionStatus(url, 'started');
+					
+					const transcriptionTask = this.startAsyncTranscription(
+						result.data.url, 
+						result.data.videoId, 
+						result.filePath, 
+						true,
+						(status: string, timeElapsed?: number) => {
+							if (status === 'Completed') {
+								modal.updateTranscriptionStatus(url, 'completed', timeElapsed);
+							} else if (status === 'Failed') {
+								modal.updateTranscriptionStatus(url, 'failed', timeElapsed);
+							}
+						}
+					);
+					
+					transcriptionTasks.push(transcriptionTask);
+				}
+
 				processed++;
 				
 			} catch (error) {
@@ -790,11 +856,25 @@ export default class TikTokerPlugin extends Plugin {
 			}
 		}
 
-		modal.close();
-		this.showBulkProcessingResults(results);
+		// Mark processing as complete, but keep modal open for transcriptions
+		modal.updateProgress(urls.length, 'All files created - transcriptions in progress...');
+		
+		// Wait for all transcription tasks to complete before closing
+		if (transcriptionTasks.length > 0) {
+			await Promise.allSettled(transcriptionTasks);
+		}
+		
+		// Only close modal if no transcriptions are pending
+		const hasActiveTranscriptions = modal.transcriptionTasks.size > 0 && 
+			Array.from(modal.transcriptionTasks.values()).some(t => t.status === 'started');
+		
+		if (!hasActiveTranscriptions) {
+			modal.close();
+			this.showBulkProcessingResults(results);
+		}
 	}
 
-	private async processTikTokUrlBulk(url: string): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean, isSlideshow?: boolean, isPrivate?: boolean}> {
+	private async processTikTokUrlBulk(url: string): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean, isSlideshow?: boolean, isPrivate?: boolean, filePath?: string, data?: any}> {
 		try {
 			const expandedUrl = await this.expandUrl(url);
 			const tikTokData = await this.fetchTikTokData(expandedUrl, true);
@@ -808,11 +888,22 @@ export default class TikTokerPlugin extends Plugin {
 			}
 			
 			const result = await this.createTikTokNote(tikTokData, true);
+			
+			// Build file path for transcription tracking
+			let filePath = '';
+			if (result.success) {
+				const fileName = this.generateFileName(tikTokData);
+				const folderPath = this.settings.outputFolder;
+				filePath = folderPath ? `${folderPath}/${fileName}.md` : `${fileName}.md`;
+			}
+			
 			return {
 				...result,
 				oembedFailed: tikTokData.oembedFailed,
 				isSlideshow: tikTokData.isSlideshow,
-				isPrivate: tikTokData.isPrivate
+				isPrivate: tikTokData.isPrivate,
+				filePath: filePath,
+				data: tikTokData
 			};
 		} catch (error) {
 			throw error;
@@ -856,6 +947,235 @@ export default class TikTokerPlugin extends Plugin {
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+	}
+
+	private async startAsyncTranscription(url: string, videoId: string | null, filePath: string, isBulkProcessing: boolean = false, progressCallback?: (status: string, timeElapsed?: number) => void): Promise<void> {
+		const startTime = Date.now();
+		
+		try {
+			console.log(`TikToker: Starting async transcription for ${filePath}`);
+			
+			if (progressCallback) {
+				progressCallback('Processing audio...', 0);
+			}
+			
+			const transcription = await this.getTranscription(url, videoId, true); // Always suppress notices for cleaner UX
+			const timeElapsed = Date.now() - startTime;
+			
+			if (transcription) {
+				await this.updateFileWithTranscription(filePath, transcription, true); // Always suppress notices
+				if (progressCallback) {
+					progressCallback('Completed', timeElapsed);
+				}
+			} else {
+				if (progressCallback) {
+					progressCallback('Failed', timeElapsed);
+				}
+			}
+		} catch (error) {
+			const timeElapsed = Date.now() - startTime;
+			console.error('TikToker: Async transcription failed:', error);
+			if (progressCallback) {
+				progressCallback('Failed', timeElapsed);
+			}
+		}
+	}
+
+	private async showSingleTranscriptionModal(url: string, videoId: string | null, filePath: string, data: any): Promise<void> {
+		// Close any existing modal
+		if (this.activeTranscriptionModal) {
+			this.activeTranscriptionModal.close();
+		}
+		
+		this.activeTranscriptionModal = new SingleTranscriptionModal(this.app, path.basename(filePath, '.md'), data);
+		this.activeTranscriptionModal.open();
+		
+		await this.startAsyncTranscription(url, videoId, filePath, false, (status: string, timeElapsed?: number) => {
+			if (this.activeTranscriptionModal) {
+				this.activeTranscriptionModal.updateTranscriptionStatus(status, timeElapsed);
+			}
+		});
+	}
+
+	private async updateFileWithTranscription(filePath: string, transcription: string, isBulkProcessing: boolean = false): Promise<void> {
+		try {
+			const file = this.app.vault.getAbstractFileByPath(filePath);
+			if (!file || !(file instanceof TFile)) {
+				console.error('TikToker: File not found for transcription update:', filePath);
+				return;
+			}
+
+			const content = await this.app.vault.read(file);
+			const transcriptionSection = `## Transcription\n\n${transcription.trim()}`;
+			
+			console.log('TikToker: Original content contains placeholder:', content.includes('{{transcription}}'));
+			console.log('TikToker: Transcription section to insert:', transcriptionSection.substring(0, 100));
+			
+			// Replace empty transcription placeholder with actual transcription
+			const updatedContent = content.replace(/{{transcription}}/g, transcriptionSection);
+			
+			if (updatedContent === content) {
+				console.log('TikToker: Warning - No placeholder found to replace!');
+				console.log('TikToker: Content preview:', content.substring(0, 500));
+			}
+			
+			await this.app.vault.modify(file, updatedContent);
+			
+			console.log(`TikToker: Transcription updated for ${filePath}`);
+		} catch (error) {
+			console.error('TikToker: Failed to update file with transcription:', error);
+		}
+	}
+
+	private async getTranscription(url: string, videoId: string | null, isBulkProcessing: boolean = false): Promise<string> {
+		if (this.settings.transcriptionApi === 'none') {
+			return '';
+		}
+
+		if (this.settings.transcriptionApi === 'whisper-local') {
+			return await this.getWhisperLocalTranscription(url, videoId, isBulkProcessing);
+		}
+
+		// Add other transcription services here (assemblyai, etc.)
+		return '';
+	}
+
+	private async getWhisperLocalTranscription(url: string, videoId: string | null, isBulkProcessing: boolean = false): Promise<string> {
+		const execAsync = promisify(exec);
+
+		try {
+			if (!this.settings.whisperScriptPath) {
+				if (!isBulkProcessing) {
+					new Notice('Whisper script path not configured');
+				}
+				return '';
+			}
+
+			// Check if script exists
+			if (!fs.existsSync(this.settings.whisperScriptPath)) {
+				if (!isBulkProcessing) {
+					new Notice('Whisper script not found at configured path');
+				}
+				return '';
+			}
+
+			if (!isBulkProcessing) {
+				new Notice('Generating transcription...');
+			}
+
+			// Set timeout to be longer than URL timeout to allow for transcription processing
+			const transcriptionTimeout = (this.settings.urlTimeout + 60) * 1000; // Add 60 seconds
+			
+			// Add common Homebrew paths to PATH environment variable
+			const env = {
+				...process.env,
+				PATH: [
+					'/opt/homebrew/bin',
+					'/usr/local/bin', 
+					'/usr/bin',
+					'/bin',
+					process.env.PATH || ''
+				].filter(Boolean).join(':')
+			};
+
+			// Debug: Log the PATH being used
+			console.log('TikToker: Using PATH:', env.PATH);
+
+			// Try different browser options in order of preference (selected browser first)
+			const browsers = [this.settings.whisperBrowser, this.settings.whisperBrowser === 'chrome' ? 'safari' : 'chrome'];
+			let lastError = null;
+			
+			for (const browser of browsers) {
+				try {
+					const command = `env PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH" "${this.settings.whisperScriptPath}" -b ${browser} -m "${this.settings.whisperModel}" "${url}"`;
+					console.log(`TikToker: Trying transcription with ${browser}:`, command);
+
+					const { stdout, stderr } = await execAsync(command, { 
+						timeout: transcriptionTimeout,
+						maxBuffer: 1024 * 1024, // 1MB buffer for long transcriptions
+						env: env
+					});
+
+					if (stderr) {
+						console.log(`TikToker: Whisper stderr (${browser}):`, stderr);
+					}
+
+					// Filter out yt-dlp progress and metadata output, keep only the transcription
+					const lines = stdout.split('\n');
+					let transcriptionStarted = false;
+					const transcriptionLines = [];
+					
+					for (const line of lines) {
+						const trimmedLine = line.trim();
+						
+						// Skip yt-dlp download progress and metadata
+						if (trimmedLine.startsWith('[TikTok]') || 
+							trimmedLine.startsWith('[info]') ||
+							trimmedLine.startsWith('[download]') ||
+							trimmedLine.startsWith('[ExtractAudio]') ||
+							trimmedLine.startsWith('Extracting cookies') ||
+							trimmedLine.startsWith('Extracted ') ||
+							trimmedLine.startsWith('Deleting original file') ||
+							trimmedLine.includes('% of ') ||
+							trimmedLine.includes('MiB/s') ||
+							trimmedLine.includes('ETA ')) {
+							continue;
+						}
+						
+						// If we have content that's not metadata, it should be transcription
+						if (trimmedLine.length > 0) {
+							transcriptionLines.push(trimmedLine);
+						}
+					}
+					
+					const transcription = transcriptionLines.join(' ').trim();
+					if (transcription) {
+						if (!isBulkProcessing) {
+							new Notice('Transcription completed');
+						}
+						console.log('TikToker: Transcription result:', transcription);
+						return transcription;
+					}
+					
+					// If no transcription but no error, continue to next browser
+					console.log(`TikToker: No transcription from ${browser}, trying next...`);
+					
+				} catch (error) {
+					console.log(`TikToker: Browser ${browser} failed:`, error.message);
+					lastError = error;
+					
+					// If it's a permission error specifically, try next browser
+					if (error.message && (
+						error.message.includes('Operation not permitted') ||
+						error.message.includes('binarycookies') ||
+						error.message.includes('Permission denied')
+					)) {
+						continue;
+					}
+					
+					// For other errors, also try next browser
+					continue;
+				}
+			}
+
+			// If we get here, all browsers failed
+			if (lastError) {
+				throw lastError;
+			} else {
+				throw new Error('All browser options failed to generate transcription');
+			}
+
+		} catch (error) {
+			console.error('TikToker: Transcription error:', error);
+			if (!isBulkProcessing) {
+				if (error.code === 'ETIMEDOUT') {
+					new Notice('Transcription timed out');
+				} else {
+					new Notice('Failed to generate transcription');
+				}
+			}
+			return '';
+		}
 	}
 }
 
@@ -1029,6 +1349,63 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 		}
 
+		// Transcription Section
+		containerEl.createEl('h3', {text: 'Transcription'});
+
+		new Setting(containerEl)
+			.setName('Transcription Service')
+			.setDesc('Select transcription service for TikTok audio')
+			.addDropdown(dropdown => dropdown
+				.addOption('none', 'Disabled')
+				.addOption('whisper-local', 'Local Whisper Script')
+				.addOption('assemblyai', 'AssemblyAI (Coming Soon)')
+				.setValue(this.plugin.settings.transcriptionApi)
+				.onChange(async (value) => {
+					this.plugin.settings.transcriptionApi = value as any;
+					await this.plugin.saveSettings();
+					this.display(); // Refresh to show/hide dependent settings
+				}));
+
+		if (this.plugin.settings.transcriptionApi === 'whisper-local') {
+			new Setting(containerEl)
+				.setName('Whisper Script Path')
+				.setDesc('Path to the tiktok2text.sh script')
+				.addText(text => text
+					.setPlaceholder('/path/to/tiktok2text.sh')
+					.setValue(this.plugin.settings.whisperScriptPath)
+					.onChange(async (value) => {
+						this.plugin.settings.whisperScriptPath = value;
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(containerEl)
+				.setName('Whisper Model')
+				.setDesc('Whisper model size (larger = more accurate but slower)')
+				.addDropdown(dropdown => dropdown
+					.addOption('tiny', 'Tiny (fastest)')
+					.addOption('base', 'Base (recommended)')
+					.addOption('small', 'Small')
+					.addOption('medium', 'Medium')
+					.addOption('large', 'Large (slowest)')
+					.setValue(this.plugin.settings.whisperModel)
+					.onChange(async (value) => {
+						this.plugin.settings.whisperModel = value as any;
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(containerEl)
+				.setName('Browser for Cookies')
+				.setDesc('Browser to use for authentication cookies (Chrome recommended for fewer permission issues)')
+				.addDropdown(dropdown => dropdown
+					.addOption('chrome', 'Chrome')
+					.addOption('safari', 'Safari')
+					.setValue(this.plugin.settings.whisperBrowser)
+					.onChange(async (value) => {
+						this.plugin.settings.whisperBrowser = value as any;
+						await this.plugin.saveSettings();
+					}));
+		}
+
 		containerEl.createEl('h3', {text: 'Advanced'});
 
 		new Setting(containerEl)
@@ -1186,8 +1563,15 @@ class BulkProgressModal extends Modal {
 	current: number = 0;
 	progressBar: HTMLDivElement;
 	statusText: HTMLParagraphElement;
+	transcriptionStatusText: HTMLParagraphElement;
+	transcriptionProgress: HTMLDivElement;
+	currentTranscriptionText: HTMLParagraphElement;
+	currentTranscriptionProgress: HTMLDivElement;
+	currentTranscriptionTimer: HTMLSpanElement;
 	isCompleted: boolean = false;
 	minimalToast: HTMLDivElement | null = null;
+	transcriptionTasks: Map<string, {status: string, startTime: number, endTime?: number}> = new Map();
+	currentTranscription: {url: string, startTime: number, interval?: any} | null = null;
 
 	constructor(app: App, total: number) {
 		super(app);
@@ -1197,6 +1581,11 @@ class BulkProgressModal extends Modal {
 	onOpen() {
 		const {contentEl} = this;
 		contentEl.empty();
+		this.createModalContent();
+	}
+
+	createModalContent() {
+		const {contentEl} = this;
 
 		contentEl.createEl('h2', {text: 'Processing TikTok URLs'});
 		
@@ -1220,6 +1609,78 @@ class BulkProgressModal extends Modal {
 		progressText.style.textAlign = 'center';
 		progressText.style.margin = '10px 0';
 		progressText.id = 'progress-text';
+
+		// Transcription status section
+		const transcriptionSection = contentEl.createDiv({cls: 'transcription-section'});
+		transcriptionSection.style.cssText = `
+			margin-top: 20px;
+			padding-top: 15px;
+			border-top: 1px solid var(--background-modifier-border);
+		`;
+
+		transcriptionSection.createEl('h4', {text: 'Transcription Status'}).style.margin = '0 0 10px 0';
+		
+		this.transcriptionStatusText = transcriptionSection.createEl('p', {text: 'Waiting for files to be created...'});
+		this.transcriptionStatusText.style.cssText = `
+			margin: 0 0 10px 0;
+			color: var(--text-muted);
+			font-size: 0.9em;
+		`;
+
+		const transcriptionContainer = transcriptionSection.createDiv();
+		transcriptionContainer.style.cssText = `
+			width: 100%;
+			height: 4px;
+			background-color: var(--background-modifier-border);
+			border-radius: 2px;
+			overflow: hidden;
+		`;
+
+		this.transcriptionProgress = transcriptionContainer.createDiv();
+		this.transcriptionProgress.style.cssText = `
+			height: 100%;
+			background-color: var(--color-accent);
+			width: 0%;
+			transition: width 0.3s ease;
+		`;
+
+		// Current transcription progress section
+		const currentSection = transcriptionSection.createDiv({cls: 'current-transcription'});
+		currentSection.style.cssText = `
+			margin-top: 15px;
+			padding-top: 10px;
+			border-top: 1px solid var(--background-modifier-border-focus);
+		`;
+
+		this.currentTranscriptionText = currentSection.createEl('p', {text: 'No active transcription'});
+		this.currentTranscriptionText.style.cssText = `
+			margin: 0 0 8px 0;
+			font-size: 0.85em;
+			color: var(--text-normal);
+		`;
+
+		this.currentTranscriptionTimer = this.currentTranscriptionText.createEl('span', {text: ''});
+		this.currentTranscriptionTimer.style.cssText = `
+			color: var(--text-muted);
+			font-size: 0.8em;
+		`;
+
+		const currentContainer = currentSection.createDiv();
+		currentContainer.style.cssText = `
+			width: 100%;
+			height: 3px;
+			background-color: var(--background-modifier-border);
+			border-radius: 2px;
+			overflow: hidden;
+		`;
+
+		this.currentTranscriptionProgress = currentContainer.createDiv();
+		this.currentTranscriptionProgress.style.cssText = `
+			height: 100%;
+			background-color: var(--interactive-accent);
+			width: 0%;
+			transition: width 0.3s ease;
+		`;
 	}
 
 	updateProgress(current: number, status: string) {
@@ -1339,6 +1800,116 @@ class BulkProgressModal extends Modal {
 				}
 			}, 2000); // Remove 2 seconds after completion
 		}
+	}
+
+	updateTranscriptionStatus(url: string, status: 'started' | 'completed' | 'failed', timeElapsed?: number) {
+		if (status === 'started') {
+			this.transcriptionTasks.set(url, {status: 'started', startTime: Date.now()});
+			this.startCurrentTranscriptionTracking(url);
+		} else {
+			const task = this.transcriptionTasks.get(url);
+			if (task) {
+				task.status = status;
+				task.endTime = Date.now();
+			}
+			this.stopCurrentTranscriptionTracking();
+		}
+
+		// Update overall transcription UI
+		const completed = Array.from(this.transcriptionTasks.values()).filter(t => t.status === 'completed' || t.status === 'failed').length;
+		const inProgress = Array.from(this.transcriptionTasks.values()).filter(t => t.status === 'started').length;
+		
+		if (this.transcriptionStatusText) {
+			if (this.transcriptionTasks.size === 0) {
+				this.transcriptionStatusText.textContent = 'Waiting for files to be created...';
+			} else if (completed === this.transcriptionTasks.size) {
+				const avgTime = this.getAverageTranscriptionTime();
+				this.transcriptionStatusText.textContent = `All transcriptions completed (avg: ${avgTime}s)`;
+				
+				// Close modal after all transcriptions complete with delay
+				setTimeout(() => {
+					this.close();
+					// Find the plugin instance to show results
+					const plugin = (this.app as any).plugins.plugins['tiktoker-obsidian'];
+					if (plugin) {
+						// Results will be shown when modal closes
+					}
+				}, 2000);
+			} else {
+				this.transcriptionStatusText.textContent = `Transcribed ${completed}/${this.transcriptionTasks.size} TikToks`;
+			}
+		}
+
+		if (this.transcriptionProgress && this.transcriptionTasks.size > 0) {
+			const progress = (completed / this.transcriptionTasks.size) * 100;
+			this.transcriptionProgress.style.width = `${progress}%`;
+		}
+	}
+
+	startCurrentTranscriptionTracking(url: string) {
+		this.stopCurrentTranscriptionTracking(); // Clean up any existing
+		
+		const fileName = url.split('/').pop()?.split('?')[0] || 'TikTok';
+		this.currentTranscription = {
+			url: url,
+			startTime: Date.now()
+		};
+
+		if (this.currentTranscriptionText) {
+			this.currentTranscriptionText.textContent = `Transcribing: ${fileName}`;
+		}
+
+		// Start real-time timer and progress animation
+		this.currentTranscription.interval = setInterval(() => {
+			if (this.currentTranscription && this.currentTranscriptionTimer) {
+				const elapsed = (Date.now() - this.currentTranscription.startTime) / 1000;
+				this.currentTranscriptionTimer.textContent = ` (${elapsed.toFixed(1)}s)`;
+			}
+
+			// Animate progress bar
+			if (this.currentTranscriptionProgress) {
+				const currentWidth = parseFloat(this.currentTranscriptionProgress.style.width) || 0;
+				if (currentWidth < 85) {
+					this.currentTranscriptionProgress.style.width = `${Math.min(85, currentWidth + Math.random() * 10)}%`;
+				}
+			}
+		}, 1000);
+
+		// Initial progress
+		if (this.currentTranscriptionProgress) {
+			this.currentTranscriptionProgress.style.width = '10%';
+		}
+	}
+
+	stopCurrentTranscriptionTracking() {
+		if (this.currentTranscription?.interval) {
+			clearInterval(this.currentTranscription.interval);
+		}
+
+		if (this.currentTranscriptionProgress) {
+			this.currentTranscriptionProgress.style.width = '100%';
+		}
+
+		if (this.currentTranscriptionText) {
+			this.currentTranscriptionText.textContent = 'No active transcription';
+		}
+
+		if (this.currentTranscriptionTimer) {
+			this.currentTranscriptionTimer.textContent = '';
+		}
+
+		this.currentTranscription = null;
+	}
+
+	getAverageTranscriptionTime(): string {
+		const completedTasks = Array.from(this.transcriptionTasks.values()).filter(t => t.status === 'completed' && t.endTime);
+		if (completedTasks.length === 0) return '0';
+		
+		const totalTime = completedTasks.reduce((sum, task) => {
+			return sum + (task.endTime! - task.startTime);
+		}, 0);
+		
+		return ((totalTime / completedTasks.length) / 1000).toFixed(1);
 	}
 
 	onClose() {
@@ -1664,5 +2235,404 @@ class BulkResultsModal extends Modal {
 	onClose() {
 		const {contentEl} = this;
 		contentEl.empty();
+	}
+}
+
+class SingleTranscriptionModal extends Modal {
+	fileName: string;
+	data: any;
+	statusText: HTMLSpanElement;
+	timeText: HTMLSpanElement;
+	progressBar: HTMLDivElement;
+	startTime: number;
+	isMinimized: boolean = false;
+	interval: any;
+	plugin: TikTokerPlugin;
+
+	constructor(app: App, fileName: string, data: any) {
+		super(app);
+		this.fileName = fileName;
+		this.data = data;
+		this.startTime = Date.now();
+		this.plugin = (this.app as any).plugins.plugins['tiktoker-obsidian'];
+	}
+
+	onOpen() {
+		const {contentEl} = this;
+		contentEl.empty();
+
+		// Make modal minimizable and position in top-right corner
+		this.modalEl.style.cssText = `
+			position: fixed !important;
+			top: 20px !important;
+			right: 20px !important;
+			left: auto !important;
+			width: 320px;
+			max-width: 320px;
+			z-index: 1000;
+			transform: none !important;
+		`;
+
+		// Header with TikTok info and minimize button
+		const header = contentEl.createDiv({cls: 'transcription-modal-header'});
+		header.style.cssText = `
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			padding: 16px;
+			border-bottom: 1px solid var(--background-modifier-border);
+		`;
+
+		const titleSection = header.createDiv();
+		titleSection.createEl('h3', {text: 'TikTok Processing', cls: 'modal-title'}).style.margin = '0 0 4px 0';
+		titleSection.createEl('div', {text: `by ${this.data.author}`, cls: 'modal-subtitle'}).style.cssText = `
+			font-size: 0.85em;
+			color: var(--text-muted);
+		`;
+
+		const minimizeBtn = header.createEl('button', {text: '−', cls: 'minimize-btn'});
+		minimizeBtn.style.cssText = `
+			background: none;
+			border: none;
+			font-size: 18px;
+			cursor: pointer;
+			color: var(--text-muted);
+			padding: 4px 8px;
+		`;
+
+		// Content section
+		const content = contentEl.createDiv({cls: 'transcription-modal-content'});
+		content.style.cssText = `padding: 16px;`;
+
+		// File creation status
+		const fileSection = content.createDiv({cls: 'file-section'});
+		fileSection.style.cssText = `margin-bottom: 20px;`;
+		
+		fileSection.createEl('div', {text: '✅ File created successfully'}).style.cssText = `
+			color: var(--text-success);
+			font-size: 0.9em;
+			margin-bottom: 4px;
+		`;
+		fileSection.createEl('div', {text: this.fileName, cls: 'file-name'}).style.cssText = `
+			font-size: 0.8em;
+			color: var(--text-muted);
+		`;
+
+		// Transcription section
+		const transcriptionSection = content.createDiv({cls: 'transcription-section'});
+		transcriptionSection.createEl('h4', {text: 'Transcription'}).style.margin = '0 0 8px 0';
+
+		const statusLine = transcriptionSection.createDiv();
+		statusLine.style.cssText = `
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			margin-bottom: 12px;
+		`;
+
+		this.statusText = statusLine.createEl('span', {text: 'Processing audio...'});
+		this.statusText.style.cssText = `font-size: 0.9em;`;
+
+		this.timeText = statusLine.createEl('span', {text: '0.0s'});
+		this.timeText.style.cssText = `
+			font-size: 0.8em;
+			color: var(--text-muted);
+		`;
+
+		// Progress bar
+		const progressContainer = transcriptionSection.createDiv();
+		progressContainer.style.cssText = `
+			width: 100%;
+			height: 6px;
+			background-color: var(--background-modifier-border);
+			border-radius: 3px;
+			overflow: hidden;
+		`;
+
+		this.progressBar = progressContainer.createDiv();
+		this.progressBar.style.cssText = `
+			height: 100%;
+			background-color: var(--interactive-accent);
+			width: 15%;
+			transition: width 0.3s ease;
+		`;
+
+		// Minimize/expand functionality
+		minimizeBtn.onclick = () => {
+			this.toggleMinimize(content, minimizeBtn);
+		};
+
+		// Start progress animation and timer
+		this.startProgressTracking();
+	}
+
+	toggleMinimize(content: HTMLDivElement, button: HTMLButtonElement) {
+		this.isMinimized = !this.isMinimized;
+		
+		if (this.isMinimized) {
+			content.style.display = 'none';
+			button.textContent = '+';
+			this.modalEl.style.width = '200px';
+		} else {
+			content.style.display = 'block';
+			button.textContent = '−';
+			this.modalEl.style.width = '320px';
+		}
+	}
+
+	startProgressTracking() {
+		this.interval = setInterval(() => {
+			if (this.timeText) {
+				const elapsed = (Date.now() - this.startTime) / 1000;
+				this.timeText.textContent = `${elapsed.toFixed(1)}s`;
+			}
+			
+			// Animate progress bar until completion
+			if (this.progressBar && this.progressBar.style.width !== '100%') {
+				const currentWidth = parseFloat(this.progressBar.style.width) || 0;
+				if (currentWidth < 85) {
+					this.progressBar.style.width = `${Math.min(85, currentWidth + Math.random() * 8)}%`;
+				}
+			}
+		}, 1000);
+	}
+
+	updateTranscriptionStatus(status: string, timeElapsed?: number) {
+		if (this.statusText) {
+			this.statusText.textContent = status;
+		}
+
+		if (timeElapsed && this.timeText) {
+			this.timeText.textContent = `${(timeElapsed / 1000).toFixed(1)}s`;
+		}
+
+		if (this.progressBar) {
+			if (status === 'Completed') {
+				this.progressBar.style.width = '100%';
+				this.statusText.style.color = 'var(--text-success)';
+				
+				// Keep modal open but allow user to close it
+				// Auto-close after 5 seconds to give user time to see completion
+				setTimeout(() => {
+					if (this.plugin && this.plugin.activeTranscriptionModal === this) {
+						this.close();
+					}
+				}, 5000);
+			} else if (status === 'Failed') {
+				this.progressBar.style.backgroundColor = 'var(--text-error)';
+				this.statusText.style.color = 'var(--text-error)';
+				
+				// Auto-close after 8 seconds for failures
+				setTimeout(() => {
+					if (this.plugin && this.plugin.activeTranscriptionModal === this) {
+						this.close();
+					}
+				}, 8000);
+			}
+		}
+
+		// Clean up interval when done
+		if ((status === 'Completed' || status === 'Failed') && this.interval) {
+			clearInterval(this.interval);
+		}
+	}
+
+	onClose() {
+		if (this.interval) {
+			clearInterval(this.interval);
+		}
+		
+		// Clear plugin reference
+		if (this.plugin && this.plugin.activeTranscriptionModal === this) {
+			this.plugin.activeTranscriptionModal = null;
+		}
+		
+		const {contentEl} = this;
+		contentEl.empty();
+	}
+}
+
+class SingleTranscriptionToast {
+	app: App;
+	fileName: string;
+	toastElement: HTMLDivElement;
+	statusText: HTMLSpanElement;
+	timeText: HTMLSpanElement;
+	progressBar: HTMLDivElement;
+	startTime: number;
+	isCollapsed: boolean = false;
+
+	constructor(app: App, fileName: string) {
+		this.app = app;
+		this.fileName = fileName;
+		this.startTime = Date.now();
+	}
+
+	show() {
+		// Create toast element
+		this.toastElement = document.body.createDiv({cls: 'transcription-toast'});
+		this.toastElement.style.cssText = `
+			position: fixed;
+			top: 20px;
+			right: 20px;
+			width: 280px;
+			background: var(--background-primary);
+			border: 1px solid var(--background-modifier-border);
+			border-radius: 8px;
+			box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+			z-index: 1000;
+			transition: all 0.3s ease;
+		`;
+
+		// Header
+		const header = this.toastElement.createDiv({cls: 'toast-header'});
+		header.style.cssText = `
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			padding: 12px 16px;
+			cursor: pointer;
+			border-bottom: 1px solid var(--background-modifier-border);
+		`;
+
+		const titleSection = header.createDiv();
+		titleSection.createEl('div', {text: 'Transcribing', cls: 'toast-title'}).style.cssText = `
+			font-weight: 600;
+			font-size: 0.9em;
+		`;
+		titleSection.createEl('div', {text: this.fileName, cls: 'toast-filename'}).style.cssText = `
+			font-size: 0.8em;
+			color: var(--text-muted);
+			margin-top: 2px;
+		`;
+
+		const collapseBtn = header.createEl('button', {text: '−'});
+		collapseBtn.style.cssText = `
+			background: none;
+			border: none;
+			font-size: 16px;
+			cursor: pointer;
+			color: var(--text-muted);
+		`;
+
+		// Content
+		const content = this.toastElement.createDiv({cls: 'toast-content'});
+		content.style.cssText = `
+			padding: 12px 16px;
+		`;
+
+		this.statusText = content.createEl('span', {text: 'Processing audio...'});
+		this.statusText.style.cssText = `
+			font-size: 0.85em;
+			color: var(--text-normal);
+		`;
+
+		this.timeText = content.createEl('span', {text: ' (0s)'});
+		this.timeText.style.cssText = `
+			font-size: 0.8em;
+			color: var(--text-muted);
+		`;
+
+		// Progress bar
+		const progressContainer = content.createDiv();
+		progressContainer.style.cssText = `
+			width: 100%;
+			height: 3px;
+			background-color: var(--background-modifier-border);
+			border-radius: 2px;
+			margin-top: 8px;
+			overflow: hidden;
+		`;
+
+		this.progressBar = progressContainer.createDiv();
+		this.progressBar.style.cssText = `
+			height: 100%;
+			background-color: var(--interactive-accent);
+			width: 20%;
+			transition: width 0.3s ease;
+		`;
+
+		// Collapse functionality
+		const toggleCollapse = () => {
+			this.isCollapsed = !this.isCollapsed;
+			if (this.isCollapsed) {
+				content.style.display = 'none';
+				collapseBtn.textContent = '+';
+				this.toastElement.style.width = '200px';
+			} else {
+				content.style.display = 'block';
+				collapseBtn.textContent = '−';
+				this.toastElement.style.width = '280px';
+			}
+		};
+
+		header.onclick = toggleCollapse;
+		collapseBtn.onclick = (e) => {
+			e.stopPropagation();
+			toggleCollapse();
+		};
+
+		// Animate progress
+		this.animateProgress();
+	}
+
+	animateProgress() {
+		const interval = setInterval(() => {
+			const elapsed = (Date.now() - this.startTime) / 1000;
+			if (this.timeText) {
+				this.timeText.textContent = ` (${elapsed.toFixed(1)}s)`;
+			}
+			
+			// Animate progress bar until completion
+			if (this.progressBar && this.progressBar.style.width !== '100%') {
+				const currentWidth = parseFloat(this.progressBar.style.width) || 0;
+				if (currentWidth < 80) {
+					this.progressBar.style.width = `${Math.min(80, currentWidth + Math.random() * 10)}%`;
+				}
+			}
+		}, 1000);
+
+		// Store interval for cleanup
+		(this.toastElement as any)._interval = interval;
+	}
+
+	updateStatus(status: string, timeElapsed?: number) {
+		if (this.statusText) {
+			this.statusText.textContent = status;
+		}
+
+		if (timeElapsed && this.timeText) {
+			this.timeText.textContent = ` (${(timeElapsed / 1000).toFixed(1)}s)`;
+		}
+
+		if (this.progressBar) {
+			if (status === 'Completed') {
+				this.progressBar.style.width = '100%';
+				this.statusText.style.color = 'var(--text-success)';
+				this.autoHide(3000);
+			} else if (status === 'Failed') {
+				this.progressBar.style.backgroundColor = 'var(--text-error)';
+				this.statusText.style.color = 'var(--text-error)';
+				this.autoHide(5000);
+			}
+		}
+
+		// Clean up interval
+		if ((this.toastElement as any)._interval) {
+			clearInterval((this.toastElement as any)._interval);
+		}
+	}
+
+	autoHide(delay: number) {
+		setTimeout(() => {
+			if (this.toastElement) {
+				this.toastElement.style.opacity = '0';
+				setTimeout(() => {
+					if (this.toastElement) {
+						this.toastElement.remove();
+					}
+				}, 300);
+			}
+		}, delay);
 	}
 }
