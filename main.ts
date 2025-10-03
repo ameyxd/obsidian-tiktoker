@@ -30,9 +30,6 @@ interface TikTokerSettings {
 	bypassModalForSingle: boolean;
 	showBulkProcessingProgress: boolean;
 	enableTranscription: boolean;
-	whisperScriptPath: string;
-	whisperModel: string;
-	whisperBrowser: string;
 	debugMode: boolean;
 }
 
@@ -62,9 +59,6 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	bypassModalForSingle: true,
 	showBulkProcessingProgress: true,
 	enableTranscription: false,
-	whisperScriptPath: '',
-	whisperModel: 'base',
-	whisperBrowser: 'chrome',
 	debugMode: false
 }
 
