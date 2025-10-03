@@ -1,8 +1,8 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile } from 'obsidian';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import * as path from 'path';
 import * as fs from 'fs';
+import * as path from 'path';
 
 interface TikTokerSettings {
 	outputFolder: string;
@@ -29,6 +29,11 @@ interface TikTokerSettings {
 	enableBulkProcessing: boolean;
 	bypassModalForSingle: boolean;
 	showBulkProcessingProgress: boolean;
+	enableTranscription: boolean;
+	whisperScriptPath: string;
+	whisperModel: string;
+	whisperBrowser: string;
+	debugMode: boolean;
 }
 
 const DEFAULT_SETTINGS: TikTokerSettings = {
@@ -55,12 +60,16 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	noteContentTemplate: '{{iframe}}\n\n## Description\n{{description}}\n\n## Hashtags\n{{hashtags}}\n\n{{transcription}}',
 	enableBulkProcessing: true,
 	bypassModalForSingle: true,
-	showBulkProcessingProgress: true
+	showBulkProcessingProgress: true,
+	enableTranscription: false,
+	whisperScriptPath: '',
+	whisperModel: 'base',
+	whisperBrowser: 'chrome',
+	debugMode: false
 }
 
 export default class TikTokerPlugin extends Plugin {
 	settings: TikTokerSettings;
-	activeTranscriptionModal: SingleTranscriptionModal | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -74,6 +83,22 @@ export default class TikTokerPlugin extends Plugin {
 			name: 'Read TikTok from clipboard',
 			callback: () => {
 				this.processTikTokFromClipboard();
+			}
+		});
+
+		this.addCommand({
+			id: 'transcribe-tiktok',
+			name: 'Transcribe TikTok in current note',
+			editorCallback: (editor: Editor, view: MarkdownView) => {
+				this.transcribeTikTokInNote(editor, view);
+			},
+			editorCheckCallback: (checking: boolean, editor: Editor, view: MarkdownView) => {
+				// Show command when there's an active markdown editor
+				if (checking) {
+					return view.getMode() === 'source' || view.getMode() === 'preview';
+				}
+				this.transcribeTikTokInNote(editor, view);
+				return true;
 			}
 		});
 
@@ -92,8 +117,8 @@ export default class TikTokerPlugin extends Plugin {
 
 			if (this.shouldShowBulkModal(tikTokUrls)) {
 				// Show bulk processing modal
-				const modal = new BulkProcessingModal(this.app, tikTokUrls, (selectedUrls) => {
-					this.processBulkTikToks(selectedUrls);
+				const modal = new BulkProcessingModal(this.app, tikTokUrls, (selectedUrls, enableTranscription) => {
+					this.processBulkTikToks(selectedUrls, enableTranscription);
 				});
 				modal.open();
 			} else {
@@ -150,24 +175,24 @@ export default class TikTokerPlugin extends Plugin {
 	private async fetchTikTokData(url: string, isBulkProcessing: boolean = false) {
 		// On mobile, skip oEmbed entirely and use fallback methods for better reliability
 		if (Platform.isMobile) {
-			console.log('TikToker Debug - Mobile detected, using fallback methods');
+			this.debugLog('Mobile detected, using fallback methods');
 			return await this.fetchTikTokDataMobile(url, isBulkProcessing);
 		}
 		
 		// Desktop: Use existing oEmbed-first approach
 		const videoId = this.extractVideoId(url);
-		console.log('TikToker Debug - Video ID extracted:', videoId);
+		this.debugLog('Video ID extracted:', videoId);
 		
 		// Check if this is a slideshow URL (contains /photo/)
 		const isSlideshow = url.includes('/photo/');
 		if (isSlideshow) {
-			console.log('TikToker Debug - Detected slideshow URL:', url);
+			this.debugLog('Detected slideshow URL:', url);
 			return await this.handleSlideshowUrl(url, videoId, isBulkProcessing);
 		}
 		
 		try {
 			const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`;
-			console.log('TikToker Debug - Attempting oEmbed:', oembedUrl);
+			this.debugLog('Attempting oEmbed:', oembedUrl);
 			
 			const controller = new AbortController();
 			setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
@@ -184,20 +209,20 @@ export default class TikTokerPlugin extends Plugin {
 			}
 
 			const oembedData = await response.json();
-			console.log('TikToker Debug - oEmbed success:', oembedData);
-			console.log('TikToker Debug - oEmbed HTML:', oembedData.html);
+			this.debugLog('oEmbed success:', oembedData);
+			this.debugLog('oEmbed HTML:', oembedData.html);
 			
 			// Extract video ID from oEmbed HTML if our URL parsing failed
 			let finalVideoId = videoId;
 			if (!finalVideoId && oembedData.html) {
 				const videoIdMatch = oembedData.html.match(/data-video-id="(\d+)"/);
 				finalVideoId = videoIdMatch ? videoIdMatch[1] : null;
-				console.log('TikToker Debug - Video ID from oEmbed HTML:', finalVideoId);
+				this.debugLog('Video ID from oEmbed HTML:', finalVideoId);
 			}
 			
 			// Since iframes don't work in Obsidian, create a working alternative
 			const workingEmbed = this.createObsidianCompatibleEmbed(oembedData, finalVideoId, url);
-			console.log('TikToker Debug - Created Obsidian-compatible embed');
+			this.debugLog('Created Obsidian-compatible embed');
 			
 			const postedDate = await this.extractTikTokPostedDate(url, finalVideoId);
 			
@@ -274,20 +299,20 @@ export default class TikTokerPlugin extends Plugin {
 	}
 
 	private async fetchTikTokDataMobile(url: string, isBulkProcessing: boolean = false) {
-		console.log('TikToker Debug - Mobile processing for URL:', url);
+		this.debugLog('Mobile processing for URL:', url);
 		
 		// First, expand short URLs (like /t/ format) to get the full URL with author info
 		const expandedUrl = await this.expandUrl(url);
-		console.log('TikToker Debug - Expanded URL:', expandedUrl);
+		this.debugLog('Expanded URL:', expandedUrl);
 		
 		// Extract video ID from expanded URL
 		const videoId = this.extractVideoId(expandedUrl);
-		console.log('TikToker Debug - Mobile Video ID:', videoId);
+		this.debugLog('Mobile Video ID:', videoId);
 		
 		// Check if this is a slideshow URL (contains /photo/)
 		const isSlideshow = expandedUrl.includes('/photo/');
 		if (isSlideshow) {
-			console.log('TikToker Debug - Mobile slideshow detected');
+			this.debugLog('Mobile slideshow detected');
 			return await this.handleSlideshowUrl(expandedUrl, videoId, isBulkProcessing);
 		}
 		
@@ -297,7 +322,7 @@ export default class TikTokerPlugin extends Plugin {
 		
 		// Check for private video indicators in URL expansion
 		if (author === 'Unknown' || !videoId) {
-			console.log('TikToker Debug - Mobile: possible private video or parsing failure');
+			this.debugLog('Mobile: possible private video or parsing failure');
 			// This might be a private video - use URL as fallback
 			return await this.handlePrivateVideo(expandedUrl, videoId, isBulkProcessing);
 		}
@@ -312,7 +337,7 @@ export default class TikTokerPlugin extends Plugin {
 		const markdownFallback = `\n\n![${description}](${expandedUrl})`;
 		const finalEmbedHtml = embedHtml + markdownFallback;
 		
-		console.log('TikToker Debug - Mobile processing complete with markdown fallback');
+		this.debugLog('Mobile processing complete with markdown fallback');
 		return {
 			author: author,
 			description: description,
@@ -329,7 +354,7 @@ export default class TikTokerPlugin extends Plugin {
 	}
 
 	private async handleSlideshowUrl(url: string, videoId: string | null, isBulkProcessing: boolean): Promise<any> {
-		console.log('TikToker Debug - Processing slideshow URL');
+		this.debugLog('Processing slideshow URL');
 		
 		// Try to extract basic info for the title
 		const authorWithAt = this.extractAuthorFromUrl(url);
@@ -470,12 +495,14 @@ export default class TikTokerPlugin extends Plugin {
 					const date = new Date(lastModified);
 					return date.toISOString().split('T')[0];
 				}
-			} catch (fetchError) {
-				console.log('TikToker: Could not fetch posted date via HEAD request:', fetchError);
+				} catch (fetchError) {
+					this.debugLog('Could not fetch posted date via HEAD request:', fetchError);
+					return new Date().toISOString().split('T')[0];
+				}
+			} catch (error) {
+				this.debugLog('Error extracting posted date:', error);
+				return new Date().toISOString().split('T')[0];
 			}
-		} catch (error) {
-			console.log('TikToker: Error extracting posted date:', error);
-		}
 		
 		// Fallback to current date if we can't determine posted date
 		return new Date().toISOString().split('T')[0];
@@ -490,7 +517,7 @@ export default class TikTokerPlugin extends Plugin {
 		// EXACT ReadItLater approach - simple iframe like they use
 		if (videoId) {
 			const readItLaterStyle = `<iframe width="325" height="760" src="https://www.tiktok.com/embed/v2/${videoId}"></iframe>`;
-			console.log('TikToker Debug - Using exact ReadItLater iframe:', readItLaterStyle);
+			this.debugLog('Using exact ReadItLater iframe:', readItLaterStyle);
 			return readItLaterStyle;
 		}
 		
@@ -545,6 +572,43 @@ export default class TikTokerPlugin extends Plugin {
 		return videoIdMatch ? videoIdMatch[1] : null;
 	}
 
+	private extractFinalUrlFromResponse(htmlContent: string, fallbackUrl: string): string {
+		try {
+			// Look for canonical URL in HTML head
+			const canonicalMatch = htmlContent.match(/<link[^>]*rel=['"]\s*canonical\s*['"][^>]*href=['"]([^'"]+)['"][^>]*>/i);
+			if (canonicalMatch && canonicalMatch[1]) {
+				const canonicalUrl = canonicalMatch[1];
+				// Make sure it's a valid TikTok URL
+				if (canonicalUrl.includes('tiktok.com') && canonicalUrl.includes('/video/')) {
+					return canonicalUrl;
+				}
+			}
+
+			// Look for og:url meta tag
+			const ogUrlMatch = htmlContent.match(/<meta[^>]*property=['"]og:url['"][^>]*content=['"]([^'"]+)['"][^>]*>/i);
+			if (ogUrlMatch && ogUrlMatch[1]) {
+				const ogUrl = ogUrlMatch[1];
+				if (ogUrl.includes('tiktok.com') && ogUrl.includes('/video/')) {
+					return ogUrl;
+				}
+			}
+
+			// Look for URL in JavaScript variables (common in TikTok pages)
+			const jsUrlMatch = htmlContent.match(/"canonical_url":\s*"([^"]+)"/i);
+			if (jsUrlMatch && jsUrlMatch[1]) {
+				const jsUrl = jsUrlMatch[1].replace(/\\u002F/g, '/');
+				if (jsUrl.includes('tiktok.com') && jsUrl.includes('/video/')) {
+					return jsUrl;
+				}
+			}
+
+			return fallbackUrl;
+		} catch (error) {
+			this.debugLog('Failed to extract final URL from response:', error);
+			return fallbackUrl;
+		}
+	}
+
 	// Network request wrapper methods for mobile CORS compatibility
 	private async makeHttpRequest(url: string, options: {method?: string, headers?: Record<string, string>, signal?: AbortSignal} = {}): Promise<{text: () => Promise<string>, json: () => Promise<any>, ok: boolean, status: number}> {
 		if (Platform.isMobile) {
@@ -584,24 +648,28 @@ export default class TikTokerPlugin extends Plugin {
 
 	private async makeHeadRequest(url: string, options: {redirect?: string, signal?: AbortSignal, headers?: Record<string, string>} = {}): Promise<{url: string, headers: {get: (key: string) => string | null}}> {
 		if (Platform.isMobile) {
-			// Use Obsidian's requestUrl for HEAD requests on mobile
+			// On mobile, use GET request to properly follow redirects and get final URL
 			try {
 				const response = await requestUrl({
 					url: url,
-					method: 'HEAD',
+					method: 'GET',
 					headers: {
 						'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
 						...(options.headers || {})
 					}
 				});
+				
+				// Extract final URL from response - check for canonical URLs in HTML or use response URL
+				const finalUrl = this.extractFinalUrlFromResponse(response.text, url);
+				
 				return { 
-					url: url, // requestUrl doesn't provide final URL, use original
+					url: finalUrl,
 					headers: {
 						get: (key: string) => response.headers[key] || null
 					}
 				};
 			} catch (error) {
-				console.warn('Mobile HEAD request failed, using original URL:', error);
+				this.debugLog('Mobile URL expansion failed, using original URL:', error);
 				return { 
 					url: url,
 					headers: {
@@ -662,7 +730,7 @@ export default class TikTokerPlugin extends Plugin {
 		
 		try {
 			if (existingFile && filePath === (folderPath ? `${folderPath}/${fileName}.md` : `${fileName}.md`)) {
-				await this.app.vault.delete(existingFile);
+				await this.app.fileManager.trashFile(existingFile);
 				await this.app.vault.create(filePath, noteContent);
 				if (!isBulkProcessing) new Notice(`Replaced: ${noteTitle}`);
 			} else {
@@ -775,7 +843,7 @@ export default class TikTokerPlugin extends Plugin {
 			.replace(/{{transcription}}/g, transcriptionContent);
 	}
 
-	private async processBulkTikToks(urls: string[]) {
+	private async processBulkTikToks(urls: string[], enableTranscription: boolean = false) {
 		if (urls.length === 0) return;
 
 		const modal = new BulkProgressModal(this.app, urls.length);
@@ -931,7 +999,7 @@ export default class TikTokerPlugin extends Plugin {
 
 		// Show detailed modal if there are duplicates, failures, slideshows, private videos, or oEmbed fallbacks
 		if (duplicates.length > 0 || failed.length > 0 || oembedFailed.length > 0 || slideshows.length > 0 || skippedPrivate.length > 0) {
-			const modal = new BulkResultsModal(this.app, successful, failed, duplicates, oembedFailed, slideshows, skippedPrivate, (failedUrls) => {
+			const modal = new BulkResultsModal(this.app, this, successful, failed, duplicates, oembedFailed, slideshows, skippedPrivate, (failedUrls: string[]) => {
 				// Add a delay before retrying
 				setTimeout(() => {
 					this.processBulkTikToks(failedUrls);
@@ -941,8 +1009,199 @@ export default class TikTokerPlugin extends Plugin {
 		}
 	}
 
+	// Public wrapper methods for BulkResultsModal to access private functionality
+	public async expandUrlPublic(url: string): Promise<string> {
+		return await this.expandUrl(url);
+	}
+
+	public async fetchTikTokDataPublic(url: string): Promise<any> {
+		return await this.fetchTikTokData(url, false);
+	}
+
+	public generateFileNamePublic(data: any): string {
+		return this.generateFileName(data);
+	}
+
+	public generateNoteContentPublic(data: any): string {
+		return this.generateNoteContent(data);
+	}
+
+	public async createTikTokNotePublic(data: any): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string}> {
+		return await this.createTikTokNote(data, false);
+	}
+
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+	}
+
+	async transcribeTikTokInNote(editor: Editor, view: MarkdownView) {
+		if (!this.settings.enableTranscription) {
+			new Notice('Transcription is disabled in settings');
+			return;
+		}
+
+		if (!this.settings.whisperScriptPath) {
+			new Notice('Whisper script path not configured in settings');
+			return;
+		}
+
+		const content = editor.getValue();
+		
+		// Look for TikTok URLs in the content
+		const tiktokUrlPattern = /https:\/\/(?:www\.|vm\.)?tiktok\.com\/[^\s\)]+/g;
+		const matches = content.match(tiktokUrlPattern);
+		
+		if (!matches || matches.length === 0) {
+			new Notice('No TikTok URLs found in current note');
+			return;
+		}
+
+		new Notice(`Found ${matches.length} TikTok URL(s). Processing first URL...`);
+
+		// Process only the first URL for testing
+		const url = matches[0];
+		try {
+			new Notice(`Transcribing: ${url}`);
+			
+			const transcription = await this.getLocalTranscription(url);
+			
+			// Find the URL in the content and add transcription after it
+			let updatedContent = content;
+			const urlIndex = updatedContent.indexOf(url);
+			if (urlIndex !== -1) {
+				const beforeUrl = updatedContent.substring(0, urlIndex + url.length);
+				const afterUrl = updatedContent.substring(urlIndex + url.length);
+				
+				// Check if transcription already exists
+				if (!afterUrl.startsWith('\n\n**Transcription:**')) {
+					updatedContent = beforeUrl + '\n\n**Transcription:** ' + transcription + afterUrl;
+					editor.setValue(updatedContent);
+					new Notice('Transcription added successfully');
+				} else {
+					new Notice('Transcription already exists for this URL');
+				}
+			}
+			
+		} catch (error) {
+			console.error('Transcription error:', error);
+			new Notice(`Failed to transcribe: ${error.message}`);
+		}
+	}
+
+	private async getLocalTranscription(tiktokUrl: string): Promise<string> {
+		const execAsync = promisify(exec);
+
+		try {
+			// Check if script exists
+			if (!fs.existsSync(this.settings.whisperScriptPath)) {
+				throw new Error('Whisper script not found at configured path');
+			}
+
+			new Notice('Generating transcription with local Whisper...');
+
+			// Add common Homebrew paths to PATH environment variable
+			const env = {
+				...process.env,
+				PATH: [
+					'/opt/homebrew/bin',
+					'/usr/local/bin', 
+					'/usr/bin',
+					'/bin',
+					process.env.PATH || ''
+				].filter(Boolean).join(':')
+			};
+
+			// Try script without browser authentication first, then with browser cookies
+			const scriptDir = path.dirname(this.settings.whisperScriptPath);
+			const approaches = [
+				{
+					name: 'script-no-cookies',
+					command: `cd "${scriptDir}" && bash "${this.settings.whisperScriptPath}" -m "${this.settings.whisperModel}" "${tiktokUrl}" 2>/dev/null || echo "DOWNLOAD_FAILED"`
+				},
+				{
+					name: this.settings.whisperBrowser + '-cookies',
+					command: `"${this.settings.whisperScriptPath}" -b ${this.settings.whisperBrowser} -m "${this.settings.whisperModel}" "${tiktokUrl}"`
+				}
+			];
+
+			let lastError = null;
+			
+			for (const approach of approaches) {
+				try {
+					console.log(`TikToker: Trying transcription approach ${approach.name}`);
+
+					const { stdout, stderr } = await execAsync(approach.command, { 
+						timeout: 120000, // 2 minutes timeout
+						maxBuffer: 1024 * 1024, // 1MB buffer for long transcriptions
+						env: env
+					});
+
+					if (stderr) {
+						console.log(`TikToker: Whisper stderr (${approach.name}):`, stderr);
+					}
+
+					// Check for download failure first
+					if (stdout.includes('DOWNLOAD_FAILED') || stdout.includes('Failed to fetch audio')) {
+						console.log(`TikToker: ${approach.name} - download failed, trying next approach...`);
+						continue;
+					}
+
+					// Filter out yt-dlp progress and metadata output, keep only the transcription
+					const lines = stdout.split('\n');
+					const transcriptionLines = [];
+					
+					for (const line of lines) {
+						const trimmedLine = line.trim();
+						
+						// Skip yt-dlp download progress, metadata, and script messages
+						if (trimmedLine.startsWith('[TikTok]') || 
+							trimmedLine.startsWith('[info]') ||
+							trimmedLine.startsWith('[download]') ||
+							trimmedLine.startsWith('[ExtractAudio]') ||
+							trimmedLine.startsWith('Extracting cookies') ||
+							trimmedLine.startsWith('Extracted ') ||
+							trimmedLine.startsWith('Deleting original file') ||
+							trimmedLine.startsWith('Saved: ') ||
+							trimmedLine.includes('% of ') ||
+							trimmedLine.includes('MiB/s') ||
+							trimmedLine.includes('ETA ') ||
+							trimmedLine.includes('DOWNLOAD_FAILED')) {
+							continue;
+						}
+						
+						// If we have content that's not metadata, it should be transcription
+						if (trimmedLine.length > 0) {
+							transcriptionLines.push(trimmedLine);
+						}
+					}
+					
+					const transcription = transcriptionLines.join(' ').trim();
+					if (transcription && transcription.length > 0) {
+						console.log(`TikToker: Transcription successful with ${approach.name}`);
+						return transcription;
+					}
+					
+					// If no transcription but no error, continue to next approach
+					console.log(`TikToker: No transcription from ${approach.name}, trying next...`);
+					
+				} catch (error) {
+					console.log(`TikToker: Approach ${approach.name} failed:`, error.message);
+					lastError = error;
+					continue;
+				}
+			}
+
+			// If we get here, all approaches failed
+			if (lastError) {
+				throw lastError;
+			} else {
+				throw new Error('All transcription approaches failed to generate transcription');
+			}
+
+		} catch (error) {
+			console.error('TikToker: Local transcription error:', error);
+			throw new Error(`Failed to generate transcription: ${error.message}`);
+		}
 	}
 
 	async saveSettings() {
@@ -1194,7 +1453,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 		containerEl.createEl('h2', {text: 'TikToker Settings'});
 
 		const availableVariables = containerEl.createEl('div', {cls: 'setting-item-description'});
-		availableVariables.innerHTML = '<strong>Available template variables:</strong> {{author}}, {{description}}, {{hashtags}}, {{iframe}}, {{transcription}}, {{date}}, {{url}}';
+		const strongEl = availableVariables.createEl('strong', {text: 'Available template variables:'});
+		availableVariables.appendText(' {{author}}, {{description}}, {{hashtags}}, {{iframe}}, {{transcription}}, {{date}}, {{url}}');
 
 		new Setting(containerEl)
 			.setName('Output Folder')
@@ -1349,63 +1609,6 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 		}
 
-		// Transcription Section
-		containerEl.createEl('h3', {text: 'Transcription'});
-
-		new Setting(containerEl)
-			.setName('Transcription Service')
-			.setDesc('Select transcription service for TikTok audio')
-			.addDropdown(dropdown => dropdown
-				.addOption('none', 'Disabled')
-				.addOption('whisper-local', 'Local Whisper Script')
-				.addOption('assemblyai', 'AssemblyAI (Coming Soon)')
-				.setValue(this.plugin.settings.transcriptionApi)
-				.onChange(async (value) => {
-					this.plugin.settings.transcriptionApi = value as any;
-					await this.plugin.saveSettings();
-					this.display(); // Refresh to show/hide dependent settings
-				}));
-
-		if (this.plugin.settings.transcriptionApi === 'whisper-local') {
-			new Setting(containerEl)
-				.setName('Whisper Script Path')
-				.setDesc('Path to the tiktok2text.sh script')
-				.addText(text => text
-					.setPlaceholder('/path/to/tiktok2text.sh')
-					.setValue(this.plugin.settings.whisperScriptPath)
-					.onChange(async (value) => {
-						this.plugin.settings.whisperScriptPath = value;
-						await this.plugin.saveSettings();
-					}));
-
-			new Setting(containerEl)
-				.setName('Whisper Model')
-				.setDesc('Whisper model size (larger = more accurate but slower)')
-				.addDropdown(dropdown => dropdown
-					.addOption('tiny', 'Tiny (fastest)')
-					.addOption('base', 'Base (recommended)')
-					.addOption('small', 'Small')
-					.addOption('medium', 'Medium')
-					.addOption('large', 'Large (slowest)')
-					.setValue(this.plugin.settings.whisperModel)
-					.onChange(async (value) => {
-						this.plugin.settings.whisperModel = value as any;
-						await this.plugin.saveSettings();
-					}));
-
-			new Setting(containerEl)
-				.setName('Browser for Cookies')
-				.setDesc('Browser to use for authentication cookies (Chrome recommended for fewer permission issues)')
-				.addDropdown(dropdown => dropdown
-					.addOption('chrome', 'Chrome')
-					.addOption('safari', 'Safari')
-					.setValue(this.plugin.settings.whisperBrowser)
-					.onChange(async (value) => {
-						this.plugin.settings.whisperBrowser = value as any;
-						await this.plugin.saveSettings();
-					}));
-		}
-
 		containerEl.createEl('h3', {text: 'Advanced'});
 
 		new Setting(containerEl)
@@ -1417,6 +1620,16 @@ class TikTokerSettingTab extends PluginSettingTab {
 				.setDynamicTooltip()
 				.onChange(async (value) => {
 					this.plugin.settings.urlTimeout = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Debug Mode')
+			.setDesc('Enable verbose debug logging for troubleshooting')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.debugMode)
+				.onChange(async (value) => {
+					this.plugin.settings.debugMode = value;
 					await this.plugin.saveSettings();
 				}));
 	}
@@ -1475,10 +1688,11 @@ class DuplicateFileModal extends Modal {
 
 class BulkProcessingModal extends Modal {
 	urls: string[];
-	onSubmit: (selectedUrls: string[]) => void;
+	onSubmit: (selectedUrls: string[], enableTranscription: boolean) => void;
 	checkboxes: HTMLInputElement[] = [];
+	transcriptionCheckbox: HTMLInputElement;
 
-	constructor(app: App, urls: string[], onSubmit: (selectedUrls: string[]) => void) {
+	constructor(app: App, urls: string[], onSubmit: (selectedUrls: string[], enableTranscription: boolean) => void) {
 		super(app);
 		this.urls = urls;
 		this.onSubmit = onSubmit;
@@ -1531,6 +1745,25 @@ class BulkProcessingModal extends Modal {
 			urlText.style.wordBreak = 'break-all';
 		});
 
+		// Transcription toggle
+		const transcriptionContainer = contentEl.createDiv({cls: 'transcription-toggle'});
+		transcriptionContainer.style.marginTop = '15px';
+		transcriptionContainer.style.marginBottom = '15px';
+		transcriptionContainer.style.padding = '10px';
+		transcriptionContainer.style.border = '1px solid var(--background-modifier-border)';
+		transcriptionContainer.style.borderRadius = '5px';
+		
+		const transcriptionLabel = transcriptionContainer.createEl('label');
+		transcriptionLabel.style.display = 'flex';
+		transcriptionLabel.style.alignItems = 'center';
+		transcriptionLabel.style.cursor = 'pointer';
+		
+		this.transcriptionCheckbox = transcriptionLabel.createEl('input', {type: 'checkbox'});
+		this.transcriptionCheckbox.style.marginRight = '8px';
+		
+		const transcriptionText = transcriptionLabel.createSpan({text: 'Enable transcription for processed videos'});
+		transcriptionText.style.fontSize = '0.95em';
+
 		// Action buttons
 		const actionContainer = contentEl.createDiv({cls: 'modal-button-container'});
 		actionContainer.style.display = 'flex';
@@ -1544,7 +1777,7 @@ class BulkProcessingModal extends Modal {
 				new Notice('Please select at least one URL to process');
 				return;
 			}
-			this.onSubmit(selectedUrls);
+			this.onSubmit(selectedUrls, this.transcriptionCheckbox.checked);
 			this.close();
 		};
 
@@ -1926,9 +2159,11 @@ class BulkResultsModal extends Modal {
 	slideshows: { url: string; success: boolean; isSlideshow: boolean; fileName?: string; noteTitle?: string }[];
 	skippedPrivate: { url: string; isPrivate: boolean }[];
 	onRetry: (failedUrls: string[]) => void;
+	plugin: TikTokerPlugin;
 
-	constructor(app: App, successful: any[], failed: any[], duplicates: any[], oembedFailed: any[], slideshows: any[], skippedPrivate: any[], onRetry: (failedUrls: string[]) => void) {
+	constructor(app: App, plugin: TikTokerPlugin, successful: any[], failed: any[], duplicates: any[], oembedFailed: any[], slideshows: any[], skippedPrivate: any[], onRetry: (failedUrls: string[]) => void) {
 		super(app);
+		this.plugin = plugin;
 		this.successful = successful;
 		this.failed = failed;
 		this.duplicates = duplicates;
@@ -1967,66 +2202,29 @@ class BulkResultsModal extends Modal {
 			contentEl.createEl('h3', {text: 'Duplicate Files:'});
 			
 			const duplicatesContainer = contentEl.createDiv({cls: 'duplicate-urls'});
-			duplicatesContainer.style.maxHeight = '200px';
-			duplicatesContainer.style.overflowY = 'auto';
-			duplicatesContainer.style.border = '1px solid var(--background-modifier-border)';
-			duplicatesContainer.style.padding = '10px';
-			duplicatesContainer.style.marginBottom = '15px';
-			duplicatesContainer.style.backgroundColor = 'var(--background-secondary)';
 
 			this.duplicates.forEach(item => {
 				const duplicateItem = duplicatesContainer.createDiv({cls: 'duplicate-item'});
-				duplicateItem.style.marginBottom = '12px';
-				duplicateItem.style.display = 'flex';
-				duplicateItem.style.alignItems = 'flex-start';
-				duplicateItem.style.gap = '12px';
 				
-				const content = duplicateItem.createDiv();
-				content.style.flex = '1';
-				content.style.minWidth = '0'; // Allow text to wrap
-				content.style.marginRight = '12px'; // Space from buttons
+				const content = duplicateItem.createDiv({cls: 'content'});
 				
-				const titleDiv = content.createEl('div', {text: `${item.noteTitle || item.fileName}`});
-				titleDiv.style.wordWrap = 'break-word';
-				titleDiv.style.marginBottom = '4px';
-				titleDiv.style.fontWeight = 'normal';
+				const titleDiv = content.createEl('div', {text: `${item.noteTitle || item.fileName}`, cls: 'title'});
+				const urlDiv = content.createEl('div', {text: item.url, cls: 'url'});
 				
-				const urlDiv = content.createEl('div', {
-					text: item.url,
-					cls: 'duplicate-url'
-				});
-				urlDiv.style.fontSize = '0.8em';
-				urlDiv.style.wordBreak = 'break-all'; // Only break URLs aggressively
-				urlDiv.style.opacity = '0.7';
-				urlDiv.style.lineHeight = '1.2';
-				
-				const buttonContainer = duplicateItem.createDiv();
-				buttonContainer.style.display = 'flex';
-				buttonContainer.style.flexDirection = 'column';
-				buttonContainer.style.gap = '4px';
-				buttonContainer.style.flexShrink = '0';
+				const buttonContainer = duplicateItem.createDiv({cls: 'button-container'});
 				
 				const replaceBtn = buttonContainer.createEl('button', {text: 'Replace', cls: 'duplicate-btn'});
-				replaceBtn.style.padding = '4px 8px';
-				replaceBtn.style.fontSize = '0.8em';
 				replaceBtn.onclick = () => this.handleDuplicateAction(item.url, 'replace');
 				
 				const duplicateBtn = buttonContainer.createEl('button', {text: 'Duplicate', cls: 'duplicate-btn'});
-				duplicateBtn.style.padding = '4px 8px';
-				duplicateBtn.style.fontSize = '0.8em';
 				duplicateBtn.onclick = () => this.handleDuplicateAction(item.url, 'duplicate');
 				
 				const skipBtn = buttonContainer.createEl('button', {text: 'Skip', cls: 'duplicate-btn'});
-				skipBtn.style.padding = '4px 8px';
-				skipBtn.style.fontSize = '0.8em';
 				skipBtn.onclick = () => this.handleDuplicateAction(item.url, 'skip');
 			});
 
 			// Add bulk duplicate actions
 			const bulkDuplicateActions = contentEl.createDiv({cls: 'bulk-duplicate-actions'});
-			bulkDuplicateActions.style.marginTop = '10px';
-			bulkDuplicateActions.style.display = 'flex';
-			bulkDuplicateActions.style.gap = '10px';
 			
 			const bulkReplaceBtn = bulkDuplicateActions.createEl('button', {text: 'Replace All Duplicates'});
 			bulkReplaceBtn.onclick = () => this.handleBulkDuplicateAction('replace');
@@ -2177,39 +2375,35 @@ class BulkResultsModal extends Modal {
 		if (!duplicateItem) return;
 
 		try {
-			// Get the plugin instance from the app
-			const plugin = (this.app as any).plugins.getPlugin('tiktoker');
-			if (plugin) {
-				new Notice(`Processing duplicate: ${action}`);
+			new Notice(`Processing duplicate: ${action}`);
+			
+			// Process the URL with the specified action  
+			const expandedUrl = await this.plugin.expandUrlPublic(url);
+			const tikTokData = await this.plugin.fetchTikTokDataPublic(expandedUrl);
 				
-				// Process the URL with the specified action
-				const expandedUrl = await plugin.expandUrl(url);
-				const tikTokData = await plugin.fetchTikTokData(expandedUrl, false);
+			if (action === 'replace') {
+				// Delete the existing file and create new one
+				const folderPath = this.plugin.settings.outputFolder;
+				const fileName = this.plugin.generateFileNamePublic(tikTokData);
+				const filePath = folderPath ? `${folderPath}/${fileName}.md` : `${fileName}.md`;
+				const existingFile = this.plugin.app.vault.getAbstractFileByPath(filePath);
 				
-				if (action === 'replace') {
-					// Delete the existing file and create new one
-					const folderPath = plugin.settings.outputFolder;
-					const fileName = plugin.generateFileName(tikTokData);
-					const filePath = folderPath ? `${folderPath}/${fileName}.md` : `${fileName}.md`;
-					const existingFile = plugin.app.vault.getAbstractFileByPath(filePath);
-					
-					if (existingFile) {
-						await plugin.app.vault.delete(existingFile);
-					}
-					const noteContent = plugin.generateNoteContent(tikTokData);
-					await plugin.app.vault.create(filePath, noteContent);
-					new Notice('File replaced');
-				} else if (action === 'duplicate') {
-					// Create with incremented name
-					await plugin.createTikTokNote(tikTokData, false);
-					new Notice('Duplicate file created');
+				if (existingFile) {
+					await this.plugin.app.fileManager.trashFile(existingFile);
 				}
-				// Skip action does nothing
-				
-				// Remove this item from the duplicates list and refresh
-				this.duplicates = this.duplicates.filter(item => item.url !== url);
-				this.onOpen(); // Refresh the modal
+				const noteContent = this.plugin.generateNoteContentPublic(tikTokData);
+				await this.plugin.app.vault.create(filePath, noteContent);
+				new Notice('File replaced');
+			} else if (action === 'duplicate') {
+				// Create with incremented name
+				await this.plugin.createTikTokNotePublic(tikTokData);
+				new Notice('Duplicate file created');
 			}
+			// Skip action does nothing
+			
+			// Remove this item from the duplicates list and refresh
+			this.duplicates = this.duplicates.filter(item => item.url !== url);
+			this.onOpen(); // Refresh the modal
 		} catch (error) {
 			new Notice('Failed to process duplicate');
 			console.error('Duplicate processing error:', error);
