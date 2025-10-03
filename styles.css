@@ -223,3 +223,37 @@ If your plugin does not need CSS, delete this file.
 .setting-item-description strong {
 	font-weight: bold;
 }
+
+/* Transcription section styles */
+.transcription-section {
+	margin-top: 20px;
+	padding-top: 15px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.transcription-section h4 {
+	margin: 0 0 10px 0;
+}
+
+.transcription-section p {
+	margin: 0 0 10px 0;
+	color: var(--text-muted);
+	font-size: 0.9em;
+}
+
+.current-transcription {
+	margin-top: 15px;
+	padding-top: 10px;
+	border-top: 1px solid var(--background-modifier-border-focus);
+}
+
+.current-transcription p {
+	margin: 0 0 8px 0;
+	font-size: 0.85em;
+	color: var(--text-normal);
+}
+
+.current-transcription span {
+	color: var(--text-muted);
+	font-size: 0.8em;
+}

@@ -70,6 +70,13 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 
 export default class TikTokerPlugin extends Plugin {
 	settings: TikTokerSettings;
+	activeTranscriptionModal: SingleTranscriptionModal | null = null;
+
+	private debugLog(message: string, ...args: any[]): void {
+		if (this.settings.debugMode) {
+			console.log(`TikToker Debug - ${message}`, ...args);
+		}
+	}
 
 	async onload() {
 		await this.loadSettings();
@@ -1128,7 +1135,7 @@ export default class TikTokerPlugin extends Plugin {
 			
 			for (const approach of approaches) {
 				try {
-					console.log(`TikToker: Trying transcription approach ${approach.name}`);
+					this.debugLog(`Trying transcription approach ${approach.name}`);
 
 					const { stdout, stderr } = await execAsync(approach.command, { 
 						timeout: 120000, // 2 minutes timeout
@@ -1137,12 +1144,12 @@ export default class TikTokerPlugin extends Plugin {
 					});
 
 					if (stderr) {
-						console.log(`TikToker: Whisper stderr (${approach.name}):`, stderr);
+						this.debugLog(`Whisper stderr (${approach.name}):`, stderr);
 					}
 
 					// Check for download failure first
 					if (stdout.includes('DOWNLOAD_FAILED') || stdout.includes('Failed to fetch audio')) {
-						console.log(`TikToker: ${approach.name} - download failed, trying next approach...`);
+						this.debugLog(`${approach.name} - download failed, trying next approach...`);
 						continue;
 					}
 
@@ -1177,15 +1184,15 @@ export default class TikTokerPlugin extends Plugin {
 					
 					const transcription = transcriptionLines.join(' ').trim();
 					if (transcription && transcription.length > 0) {
-						console.log(`TikToker: Transcription successful with ${approach.name}`);
+						this.debugLog(`Transcription successful with ${approach.name}`);
 						return transcription;
 					}
 					
 					// If no transcription but no error, continue to next approach
-					console.log(`TikToker: No transcription from ${approach.name}, trying next...`);
+					this.debugLog(`No transcription from ${approach.name}, trying next...`);
 					
 				} catch (error) {
-					console.log(`TikToker: Approach ${approach.name} failed:`, error.message);
+					this.debugLog(`Approach ${approach.name} failed:`, error.message);
 					lastError = error;
 					continue;
 				}
@@ -1212,7 +1219,7 @@ export default class TikTokerPlugin extends Plugin {
 		const startTime = Date.now();
 		
 		try {
-			console.log(`TikToker: Starting async transcription for ${filePath}`);
+			this.debugLog(`Starting async transcription for ${filePath}`);
 			
 			if (progressCallback) {
 				progressCallback('Processing audio...', 0);
@@ -1246,7 +1253,7 @@ export default class TikTokerPlugin extends Plugin {
 			this.activeTranscriptionModal.close();
 		}
 		
-		this.activeTranscriptionModal = new SingleTranscriptionModal(this.app, path.basename(filePath, '.md'), data);
+		this.activeTranscriptionModal = new SingleTranscriptionModal(this.app, path.basename(filePath, '.md'), data, this);
 		this.activeTranscriptionModal.open();
 		
 		await this.startAsyncTranscription(url, videoId, filePath, false, (status: string, timeElapsed?: number) => {
@@ -1267,20 +1274,20 @@ export default class TikTokerPlugin extends Plugin {
 			const content = await this.app.vault.read(file);
 			const transcriptionSection = `## Transcription\n\n${transcription.trim()}`;
 			
-			console.log('TikToker: Original content contains placeholder:', content.includes('{{transcription}}'));
-			console.log('TikToker: Transcription section to insert:', transcriptionSection.substring(0, 100));
+			this.debugLog('Original content contains placeholder:', content.includes('{{transcription}}'));
+			this.debugLog('Transcription section to insert:', transcriptionSection.substring(0, 100));
 			
 			// Replace empty transcription placeholder with actual transcription
 			const updatedContent = content.replace(/{{transcription}}/g, transcriptionSection);
 			
 			if (updatedContent === content) {
-				console.log('TikToker: Warning - No placeholder found to replace!');
-				console.log('TikToker: Content preview:', content.substring(0, 500));
+				this.debugLog('Warning - No placeholder found to replace!');
+				this.debugLog('Content preview:', content.substring(0, 500));
 			}
 			
 			await this.app.vault.modify(file, updatedContent);
 			
-			console.log(`TikToker: Transcription updated for ${filePath}`);
+			this.debugLog(`Transcription updated for ${filePath}`);
 		} catch (error) {
 			console.error('TikToker: Failed to update file with transcription:', error);
 		}
@@ -1338,25 +1345,25 @@ export default class TikTokerPlugin extends Plugin {
 			};
 
 			// Debug: Log the PATH being used
-			console.log('TikToker: Using PATH:', env.PATH);
+			this.debugLog('Using PATH:', env.PATH);
 
 			// Try different browser options in order of preference (selected browser first)
 			const browsers = [this.settings.whisperBrowser, this.settings.whisperBrowser === 'chrome' ? 'safari' : 'chrome'];
-			let lastError = null;
 			
+			let lastError = null;
 			for (const browser of browsers) {
 				try {
 					const command = `env PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH" "${this.settings.whisperScriptPath}" -b ${browser} -m "${this.settings.whisperModel}" "${url}"`;
-					console.log(`TikToker: Trying transcription with ${browser}:`, command);
+					this.debugLog(`Trying transcription with ${browser}:`, command);
 
 					const { stdout, stderr } = await execAsync(command, { 
 						timeout: transcriptionTimeout,
-						maxBuffer: 1024 * 1024, // 1MB buffer for long transcriptions
+						maxBuffer: 1024 * 1024,
 						env: env
 					});
 
 					if (stderr) {
-						console.log(`TikToker: Whisper stderr (${browser}):`, stderr);
+						this.debugLog(`Whisper stderr (${browser}):`, stderr);
 					}
 
 					// Filter out yt-dlp progress and metadata output, keep only the transcription
@@ -1392,15 +1399,15 @@ export default class TikTokerPlugin extends Plugin {
 						if (!isBulkProcessing) {
 							new Notice('Transcription completed');
 						}
-						console.log('TikToker: Transcription result:', transcription);
+						this.debugLog('Transcription result:', transcription);
 						return transcription;
 					}
 					
 					// If no transcription but no error, continue to next browser
-					console.log(`TikToker: No transcription from ${browser}, trying next...`);
+					this.debugLog(`No transcription from ${browser}, trying next...`);
 					
 				} catch (error) {
-					console.log(`TikToker: Browser ${browser} failed:`, error.message);
+					this.debugLog(`Browser ${browser} failed:`, error.message);
 					lastError = error;
 					
 					// If it's a permission error specifically, try next browser
@@ -1657,9 +1664,6 @@ class DuplicateFileModal extends Modal {
 		contentEl.createEl('p', {text: 'What would you like to do?'});
 
 		const buttonContainer = contentEl.createDiv({cls: 'modal-button-container'});
-		buttonContainer.style.display = 'flex';
-		buttonContainer.style.gap = '10px';
-		buttonContainer.style.marginTop = '20px';
 
 		const replaceButton = buttonContainer.createEl('button', {text: 'Replace', cls: 'mod-cta'});
 		replaceButton.onclick = () => {
@@ -1707,9 +1711,6 @@ class BulkProcessingModal extends Modal {
 
 		// Select All / Deselect All buttons
 		const buttonContainer = contentEl.createDiv({cls: 'bulk-select-buttons'});
-		buttonContainer.style.marginBottom = '15px';
-		buttonContainer.style.display = 'flex';
-		buttonContainer.style.gap = '10px';
 
 		const selectAllBtn = buttonContainer.createEl('button', {text: 'Select All'});
 		selectAllBtn.onclick = () => {
@@ -1723,52 +1724,28 @@ class BulkProcessingModal extends Modal {
 
 		// URL list with checkboxes
 		const urlContainer = contentEl.createDiv({cls: 'bulk-url-list'});
-		urlContainer.style.maxHeight = '400px';
-		urlContainer.style.overflowY = 'auto';
-		urlContainer.style.border = '1px solid var(--background-modifier-border)';
-		urlContainer.style.padding = '10px';
-		urlContainer.style.marginBottom = '15px';
 
 		this.urls.forEach(url => {
 			const urlItem = urlContainer.createDiv({cls: 'bulk-url-item'});
-			urlItem.style.marginBottom = '8px';
-			urlItem.style.display = 'flex';
-			urlItem.style.alignItems = 'center';
 
 			const checkbox = urlItem.createEl('input', {type: 'checkbox'});
 			checkbox.checked = true; // Default to checked
-			checkbox.style.marginRight = '10px';
 			this.checkboxes.push(checkbox);
 
 			const urlText = urlItem.createSpan({text: url});
-			urlText.style.fontSize = '0.9em';
-			urlText.style.wordBreak = 'break-all';
 		});
 
 		// Transcription toggle
 		const transcriptionContainer = contentEl.createDiv({cls: 'transcription-toggle'});
-		transcriptionContainer.style.marginTop = '15px';
-		transcriptionContainer.style.marginBottom = '15px';
-		transcriptionContainer.style.padding = '10px';
-		transcriptionContainer.style.border = '1px solid var(--background-modifier-border)';
-		transcriptionContainer.style.borderRadius = '5px';
 		
 		const transcriptionLabel = transcriptionContainer.createEl('label');
-		transcriptionLabel.style.display = 'flex';
-		transcriptionLabel.style.alignItems = 'center';
-		transcriptionLabel.style.cursor = 'pointer';
 		
 		this.transcriptionCheckbox = transcriptionLabel.createEl('input', {type: 'checkbox'});
-		this.transcriptionCheckbox.style.marginRight = '8px';
 		
 		const transcriptionText = transcriptionLabel.createSpan({text: 'Enable transcription for processed videos'});
-		transcriptionText.style.fontSize = '0.95em';
 
 		// Action buttons
 		const actionContainer = contentEl.createDiv({cls: 'modal-button-container'});
-		actionContainer.style.display = 'flex';
-		actionContainer.style.gap = '10px';
-		actionContainer.style.marginTop = '20px';
 
 		const processBtn = actionContainer.createEl('button', {text: 'Process Selected', cls: 'mod-cta'});
 		processBtn.onclick = () => {
@@ -1825,95 +1802,25 @@ class BulkProgressModal extends Modal {
 		this.statusText = contentEl.createEl('p', {text: 'Starting...'});
 		
 		const progressContainer = contentEl.createDiv({cls: 'progress-container'});
-		progressContainer.style.width = '100%';
-		progressContainer.style.height = '20px';
-		progressContainer.style.backgroundColor = 'var(--background-modifier-border)';
-		progressContainer.style.borderRadius = '10px';
-		progressContainer.style.overflow = 'hidden';
-		progressContainer.style.margin = '15px 0';
 
 		this.progressBar = progressContainer.createDiv({cls: 'progress-bar'});
-		this.progressBar.style.height = '100%';
-		this.progressBar.style.backgroundColor = 'var(--interactive-accent)';
-		this.progressBar.style.width = '0%';
-		this.progressBar.style.transition = 'width 0.3s ease';
 
-		const progressText = contentEl.createEl('p', {text: `0 / ${this.total} processed`});
-		progressText.style.textAlign = 'center';
-		progressText.style.margin = '10px 0';
+		const progressText = contentEl.createEl('p', {text: `0 / ${this.total} processed`, cls: 'progress-text'});
 		progressText.id = 'progress-text';
 
-		// Transcription status section
+		// Transcription status section (styles handled in CSS)
 		const transcriptionSection = contentEl.createDiv({cls: 'transcription-section'});
-		transcriptionSection.style.cssText = `
-			margin-top: 20px;
-			padding-top: 15px;
-			border-top: 1px solid var(--background-modifier-border);
-		`;
-
-		transcriptionSection.createEl('h4', {text: 'Transcription Status'}).style.margin = '0 0 10px 0';
-		
+		transcriptionSection.createEl('h4', {text: 'Transcription Status'});
 		this.transcriptionStatusText = transcriptionSection.createEl('p', {text: 'Waiting for files to be created...'});
-		this.transcriptionStatusText.style.cssText = `
-			margin: 0 0 10px 0;
-			color: var(--text-muted);
-			font-size: 0.9em;
-		`;
-
-		const transcriptionContainer = transcriptionSection.createDiv();
-		transcriptionContainer.style.cssText = `
-			width: 100%;
-			height: 4px;
-			background-color: var(--background-modifier-border);
-			border-radius: 2px;
-			overflow: hidden;
-		`;
-
-		this.transcriptionProgress = transcriptionContainer.createDiv();
-		this.transcriptionProgress.style.cssText = `
-			height: 100%;
-			background-color: var(--color-accent);
-			width: 0%;
-			transition: width 0.3s ease;
-		`;
+		const transcriptionContainer = transcriptionSection.createDiv({cls: 'mini-progress-bar'});
+		this.transcriptionProgress = transcriptionContainer.createDiv({cls: 'mini-progress'});
 
 		// Current transcription progress section
 		const currentSection = transcriptionSection.createDiv({cls: 'current-transcription'});
-		currentSection.style.cssText = `
-			margin-top: 15px;
-			padding-top: 10px;
-			border-top: 1px solid var(--background-modifier-border-focus);
-		`;
-
 		this.currentTranscriptionText = currentSection.createEl('p', {text: 'No active transcription'});
-		this.currentTranscriptionText.style.cssText = `
-			margin: 0 0 8px 0;
-			font-size: 0.85em;
-			color: var(--text-normal);
-		`;
-
 		this.currentTranscriptionTimer = this.currentTranscriptionText.createEl('span', {text: ''});
-		this.currentTranscriptionTimer.style.cssText = `
-			color: var(--text-muted);
-			font-size: 0.8em;
-		`;
-
-		const currentContainer = currentSection.createDiv();
-		currentContainer.style.cssText = `
-			width: 100%;
-			height: 3px;
-			background-color: var(--background-modifier-border);
-			border-radius: 2px;
-			overflow: hidden;
-		`;
-
-		this.currentTranscriptionProgress = currentContainer.createDiv();
-		this.currentTranscriptionProgress.style.cssText = `
-			height: 100%;
-			background-color: var(--interactive-accent);
-			width: 0%;
-			transition: width 0.3s ease;
-		`;
+		const currentContainer = currentSection.createDiv({cls: 'mini-progress-bar'});
+		this.currentTranscriptionProgress = currentContainer.createDiv({cls: 'mini-progress'});
 	}
 
 	updateProgress(current: number, status: string) {
@@ -1952,27 +1859,6 @@ class BulkProgressModal extends Modal {
 
 		// Create minimal progress toast
 		this.minimalToast = document.body.createDiv({cls: 'minimal-progress-toast'});
-		this.minimalToast.style.position = 'fixed';
-		this.minimalToast.style.bottom = '20px';
-		this.minimalToast.style.right = '20px';
-		this.minimalToast.style.backgroundColor = 'var(--background-primary)';
-		this.minimalToast.style.border = '1px solid var(--background-modifier-border)';
-		this.minimalToast.style.borderRadius = '8px';
-		this.minimalToast.style.padding = '12px 16px';
-		this.minimalToast.style.fontSize = '0.9em';
-		this.minimalToast.style.zIndex = '1000';
-		this.minimalToast.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
-		this.minimalToast.style.minWidth = '200px';
-		this.minimalToast.style.cursor = 'pointer';
-		this.minimalToast.style.transition = 'transform 0.2s ease';
-
-		// Add hover effect
-		this.minimalToast.onmouseenter = () => {
-			this.minimalToast!.style.transform = 'scale(1.02)';
-		};
-		this.minimalToast.onmouseleave = () => {
-			this.minimalToast!.style.transform = 'scale(1)';
-		};
 
 		// Make clickable to reopen modal
 		this.minimalToast.onclick = () => {
@@ -1983,22 +1869,12 @@ class BulkProgressModal extends Modal {
 			this.open(); // Reopen the progress modal
 		};
 
-		const progressText = this.minimalToast.createDiv();
+		const progressText = this.minimalToast.createDiv({cls: 'progress-text'});
 		progressText.textContent = `Processing TikToks: ${this.current} / ${this.total}`;
-		progressText.style.marginBottom = '8px';
 
-		const miniProgressBar = this.minimalToast.createDiv();
-		miniProgressBar.style.width = '100%';
-		miniProgressBar.style.height = '4px';
-		miniProgressBar.style.backgroundColor = 'var(--background-modifier-border)';
-		miniProgressBar.style.borderRadius = '2px';
-		miniProgressBar.style.overflow = 'hidden';
-
-		const miniProgress = miniProgressBar.createDiv();
-		miniProgress.style.height = '100%';
-		miniProgress.style.backgroundColor = 'var(--interactive-accent)';
+		const miniProgressBar = this.minimalToast.createDiv({cls: 'mini-progress-bar'});
+		const miniProgress = miniProgressBar.createDiv({cls: 'mini-progress'});
 		miniProgress.style.width = `${(this.current / this.total) * 100}%`;
-		miniProgress.style.transition = 'width 0.3s ease';
 
 		// Auto-remove after completion or timeout
 		setTimeout(() => {
@@ -2062,11 +1938,6 @@ class BulkProgressModal extends Modal {
 				// Close modal after all transcriptions complete with delay
 				setTimeout(() => {
 					this.close();
-					// Find the plugin instance to show results
-					const plugin = (this.app as any).plugins.plugins['tiktoker-obsidian'];
-					if (plugin) {
-						// Results will be shown when modal closes
-					}
 				}, 2000);
 			} else {
 				this.transcriptionStatusText.textContent = `Transcribed ${completed}/${this.transcriptionTasks.size} TikToks`;
@@ -2181,7 +2052,6 @@ class BulkResultsModal extends Modal {
 
 		// Summary
 		const summary = contentEl.createDiv({cls: 'results-summary'});
-		summary.style.marginBottom = '20px';
 		summary.createEl('p', {text: `✅ Successfully processed: ${this.successful.length}`});
 		if (this.duplicates.length > 0) {
 			summary.createEl('p', {text: `⚠️ Duplicate files skipped: ${this.duplicates.length}`});
@@ -2238,29 +2108,13 @@ class BulkResultsModal extends Modal {
 			contentEl.createEl('h3', {text: 'Image Slideshow Posts:'});
 			
 			const slideshowContainer = contentEl.createDiv({cls: 'slideshow-urls'});
-			slideshowContainer.style.maxHeight = '200px';
-			slideshowContainer.style.overflowY = 'auto';
-			slideshowContainer.style.border = '1px solid var(--background-modifier-border)';
-			slideshowContainer.style.padding = '10px';
-			slideshowContainer.style.marginBottom = '15px';
-			slideshowContainer.style.backgroundColor = 'var(--background-secondary)';
 
 			this.slideshows.forEach(item => {
 				const slideshowItem = slideshowContainer.createDiv({cls: 'slideshow-item'});
-				slideshowItem.style.marginBottom = '8px';
-				slideshowItem.style.display = 'flex';
-				slideshowItem.style.alignItems = 'center';
-				
-				const icon = slideshowItem.createSpan({text: '📸'});
-				icon.style.marginRight = '8px';
-				
+				const icon = slideshowItem.createSpan({text: '📸', cls: 'icon'});
 				const content = slideshowItem.createDiv();
 				content.createEl('div', {text: `${item.noteTitle || item.fileName}`});
-				content.createEl('div', {
-					text: item.url,
-					cls: 'slideshow-url'
-				}).style.fontSize = '0.8em';
-				content.style.opacity = '0.9';
+				content.createEl('div', {text: item.url, cls: 'url'});
 			});
 		}
 
@@ -2269,29 +2123,12 @@ class BulkResultsModal extends Modal {
 			contentEl.createEl('h3', {text: 'Private Videos Skipped:'});
 			
 			const privateContainer = contentEl.createDiv({cls: 'private-urls'});
-			privateContainer.style.maxHeight = '200px';
-			privateContainer.style.overflowY = 'auto';
-			privateContainer.style.border = '1px solid var(--background-modifier-border)';
-			privateContainer.style.padding = '10px';
-			privateContainer.style.marginBottom = '15px';
-			privateContainer.style.backgroundColor = 'var(--background-secondary)';
 
 			this.skippedPrivate.forEach(item => {
 				const privateItem = privateContainer.createDiv({cls: 'private-item'});
-				privateItem.style.marginBottom = '8px';
-				privateItem.style.display = 'flex';
-				privateItem.style.alignItems = 'center';
-
-				const icon = privateItem.createSpan({text: '🔒'});
-				icon.style.marginRight = '8px';
-
+				const icon = privateItem.createSpan({text: '🔒', cls: 'icon'});
 				const content = privateItem.createDiv();
-				content.createEl('a', {
-					href: item.url,
-					text: item.url,
-					cls: 'private-url'
-				}).style.fontSize = '0.8em';
-				content.style.opacity = '0.9';
+				content.createEl('a', {href: item.url, text: item.url, cls: 'url'});
 			});
 		}
 
@@ -2300,29 +2137,13 @@ class BulkResultsModal extends Modal {
 			contentEl.createEl('h3', {text: 'Fallback Embed Files:'});
 			
 			const fallbackContainer = contentEl.createDiv({cls: 'fallback-urls'});
-			fallbackContainer.style.maxHeight = '200px';
-			fallbackContainer.style.overflowY = 'auto';
-			fallbackContainer.style.border = '1px solid var(--background-modifier-border)';
-			fallbackContainer.style.padding = '10px';
-			fallbackContainer.style.marginBottom = '15px';
-			fallbackContainer.style.backgroundColor = 'var(--background-secondary)';
 
 			this.oembedFailed.forEach(item => {
 				const fallbackItem = fallbackContainer.createDiv({cls: 'fallback-item'});
-				fallbackItem.style.marginBottom = '8px';
-				fallbackItem.style.display = 'flex';
-				fallbackItem.style.alignItems = 'center';
-				
-				const icon = fallbackItem.createSpan({text: '🔄'});
-				icon.style.marginRight = '8px';
-				
+				const icon = fallbackItem.createSpan({text: '🔄', cls: 'icon'});
 				const content = fallbackItem.createDiv();
 				content.createEl('div', {text: `${item.noteTitle || item.fileName}`});
-				content.createEl('div', {
-					text: item.url,
-					cls: 'fallback-url'
-				}).style.fontSize = '0.8em';
-				content.style.opacity = '0.9';
+				content.createEl('div', {text: item.url, cls: 'url'});
 			});
 		}
 
@@ -2330,28 +2151,15 @@ class BulkResultsModal extends Modal {
 			contentEl.createEl('h3', {text: 'Failed URLs:'});
 			
 			const failedContainer = contentEl.createDiv({cls: 'failed-urls'});
-			failedContainer.style.maxHeight = '300px';
-			failedContainer.style.overflowY = 'auto';
-			failedContainer.style.border = '1px solid var(--background-modifier-border)';
-			failedContainer.style.padding = '10px';
-			failedContainer.style.marginBottom = '15px';
 
 			this.failed.forEach(item => {
 				const failedItem = failedContainer.createDiv({cls: 'failed-item'});
-				failedItem.style.marginBottom = '10px';
-				
 				failedItem.createEl('div', {text: item.url});
-				failedItem.createEl('div', {
-					text: `Error: ${item.error || 'Unknown error'}`,
-					cls: 'error-text'
-				}).style.color = 'var(--text-error)';
+				failedItem.createEl('div', {text: `Error: ${item.error || 'Unknown error'}`, cls: 'error-text'});
 			});
 
 			// Action buttons
 			const buttonContainer = contentEl.createDiv({cls: 'modal-button-container'});
-			buttonContainer.style.display = 'flex';
-			buttonContainer.style.gap = '10px';
-			buttonContainer.style.marginTop = '20px';
 
 			const retryBtn = buttonContainer.createEl('button', {text: 'Retry Failed URLs', cls: 'mod-cta'});
 			retryBtn.onclick = () => {
@@ -2363,8 +2171,8 @@ class BulkResultsModal extends Modal {
 			const closeBtn = buttonContainer.createEl('button', {text: 'Close'});
 			closeBtn.onclick = () => this.close();
 		} else {
-			const closeBtn = contentEl.createEl('button', {text: 'Close', cls: 'mod-cta'});
-			closeBtn.style.marginTop = '20px';
+			const buttonContainer = contentEl.createDiv({cls: 'modal-button-container'});
+			const closeBtn = buttonContainer.createEl('button', {text: 'Close', cls: 'mod-cta'});
 			closeBtn.onclick = () => this.close();
 		}
 	}
@@ -2443,12 +2251,12 @@ class SingleTranscriptionModal extends Modal {
 	interval: any;
 	plugin: TikTokerPlugin;
 
-	constructor(app: App, fileName: string, data: any) {
+	constructor(app: App, fileName: string, data: any, plugin: TikTokerPlugin) {
 		super(app);
 		this.fileName = fileName;
 		this.data = data;
 		this.startTime = Date.now();
-		this.plugin = (this.app as any).plugins.plugins['tiktoker-obsidian'];
+		this.plugin = plugin;
 	}
 
 	onOpen() {
@@ -2787,7 +2595,7 @@ class SingleTranscriptionToast {
 		}, 1000);
 
 		// Store interval for cleanup
-		(this.toastElement as any)._interval = interval;
+		(this.toastElement as HTMLElement & {_interval?: NodeJS.Timeout})._interval = interval;
 	}
 
 	updateStatus(status: string, timeElapsed?: number) {
@@ -2812,8 +2620,9 @@ class SingleTranscriptionToast {
 		}
 
 		// Clean up interval
-		if ((this.toastElement as any)._interval) {
-			clearInterval((this.toastElement as any)._interval);
+		const elementWithInterval = this.toastElement as HTMLElement & {_interval?: NodeJS.Timeout};
+		if (elementWithInterval._interval) {
+			clearInterval(elementWithInterval._interval);
 		}
 	}
 
