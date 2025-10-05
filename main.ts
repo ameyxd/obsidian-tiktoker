@@ -246,7 +246,7 @@ export default class TikTokerPlugin extends Plugin {
 				embedHtml: workingEmbed,
 				thumbnailUrl: oembedData.thumbnail_url,
 				videoId: finalVideoId,
-				createdDate: new Date().toISOString().split('T')[0], // When we saved it
+				createdDate: this.getCurrentDateString(), // When we saved it
 				postedDate: postedDate, // When TikTok was originally posted
 				transcription: '', // Will be filled asynchronously
 				oembedFailed: false
@@ -289,7 +289,7 @@ export default class TikTokerPlugin extends Plugin {
 					expandedUrl: url,
 					embedHtml: `![${title}](${url})`,
 					videoId: videoId,
-					createdDate: new Date().toISOString().split('T')[0],
+					createdDate: this.getCurrentDateString(),
 					postedDate: postedDate,
 					transcription: '', // No audio in slideshows
 					oembedFailed: true,
@@ -305,7 +305,7 @@ export default class TikTokerPlugin extends Plugin {
 					expandedUrl: url,
 					embedHtml: this.createObsidianCompatibleEmbed(null, videoId, url),
 					videoId: videoId,
-					createdDate: new Date().toISOString().split('T')[0],
+					createdDate: this.getCurrentDateString(),
 					postedDate: postedDate,
 					transcription: '', // Will be filled asynchronously
 					oembedFailed: true,
@@ -458,8 +458,8 @@ export default class TikTokerPlugin extends Plugin {
 					expandedUrl: url,
 					embedHtml: embedHtml + markdownFallback,
 					videoId: null,
-					createdDate: new Date().toISOString().split('T')[0],
-					postedDate: new Date().toISOString().split('T')[0],
+					createdDate: this.getCurrentDateString(),
+					postedDate: this.getCurrentDateString(),
 					transcription: '',
 					oembedFailed: true,
 					mobileOptimized: true,
@@ -498,7 +498,7 @@ export default class TikTokerPlugin extends Plugin {
 			expandedUrl: expandedUrl,
 			embedHtml: finalEmbedHtml,
 			videoId: videoId,
-			createdDate: new Date().toISOString().split('T')[0],
+			createdDate: this.getCurrentDateString(),
 			postedDate: postedDate,
 			transcription: '', // Will be filled asynchronously
 			oembedFailed: true, // Mark as oEmbed failed since we skipped it
@@ -526,7 +526,7 @@ export default class TikTokerPlugin extends Plugin {
 			expandedUrl: url,
 			embedHtml: embedHtml,
 			videoId: videoId,
-			createdDate: new Date().toISOString().split('T')[0],
+			createdDate: this.getCurrentDateString(),
 			postedDate: postedDate,
 			transcription: '', // No audio in slideshows
 			oembedFailed: false,
@@ -586,7 +586,7 @@ export default class TikTokerPlugin extends Plugin {
 					expandedUrl: url,
 					embedHtml: `<p><strong>⚠️ Private Video</strong></p><p>This TikTok video is private and cannot be accessed.</p><p>Original URL: <a href="${url}" target="_blank">${url}</a></p>`,
 					videoId: videoId,
-					createdDate: new Date().toISOString().split('T')[0],
+					createdDate: this.getCurrentDateString(),
 					postedDate: postedDate,
 					transcription: '', // Cannot transcribe private videos
 					oembedFailed: true,
@@ -604,7 +604,7 @@ export default class TikTokerPlugin extends Plugin {
 					expandedUrl: url,
 					embedHtml: `<p>TikTok video (private): <a href="${url}" target="_blank">${url}</a></p>`,
 					videoId: videoId,
-					createdDate: new Date().toISOString().split('T')[0],
+					createdDate: this.getCurrentDateString(),
 					postedDate: postedDate,
 					transcription: '', // Cannot transcribe private videos
 					oembedFailed: true,
@@ -650,15 +650,15 @@ export default class TikTokerPlugin extends Plugin {
 				}
 				} catch (fetchError) {
 					this.debugLog('Could not fetch posted date via HEAD request:', fetchError);
-					return new Date().toISOString().split('T')[0];
+					return this.getCurrentDateString();
 				}
 			} catch (error) {
 				this.debugLog('Error extracting posted date:', error);
-				return new Date().toISOString().split('T')[0];
+				return this.getCurrentDateString();
 			}
 		
 		// Fallback to current date if we can't determine posted date
-		return new Date().toISOString().split('T')[0];
+		return this.getCurrentDateString();
 	}
 
 	private extractAuthorFromUrl(url: string): string {
@@ -698,6 +698,15 @@ export default class TikTokerPlugin extends Plugin {
 	private extractHashtags(text: string): string[] {
 		const hashtagRegex = /#[\w\u00c0-\u024f\u1e00-\u1eff]+/gi;
 		return text.match(hashtagRegex) || [];
+	}
+
+	private getCurrentDateString(): string {
+		// Get current date in local timezone (not UTC)
+		const now = new Date();
+		const year = now.getFullYear();
+		const month = String(now.getMonth() + 1).padStart(2, '0');
+		const day = String(now.getDate()).padStart(2, '0');
+		return `${year}-${month}-${day}`;
 	}
 
 
@@ -889,8 +898,8 @@ export default class TikTokerPlugin extends Plugin {
 					expandedUrl: expandedUrl,
 					embedHtml: embedHtml,
 					videoId: null,
-					createdDate: new Date().toISOString().split('T')[0],
-					postedDate: new Date().toISOString().split('T')[0],
+					createdDate: this.getCurrentDateString(),
+					postedDate: this.getCurrentDateString(),
 					transcription: '',
 					oembedFailed: true,
 					mobileOptimized: true,
@@ -1318,18 +1327,18 @@ export default class TikTokerPlugin extends Plugin {
 	private generateFileName(data: any): string {
 		return this.settings.fileNamingPattern
 			.replace(/{{author}}/g, (data.author || 'unknown').replace(/[@#]/g, ''))
-			.replace(/{{date}}/g, data.createdDate || data.date || new Date().toISOString().split('T')[0])
+			.replace(/{{date}}/g, data.createdDate || data.date || this.getCurrentDateString())
 			.replace(/{{videoId}}/g, data.videoId || 'unknown')
-			.replace(/{{description}}/g, (data.description || 'TikTok Video').substring(0, 100).replace(/[^\w\s-]/g, '').trim())
-			.replace(/{{title}}/g, (data.description || 'tiktok').substring(0, 50).replace(/[^\w\s-]/g, ''));
+			.replace(/{{description}}/g, (data.description || 'TikTok Video').replace(/#[\w\u00c0-\u024f\u1e00-\u1eff]+/gi, '').substring(0, 100).replace(/[^\w\s-]/g, '').trim())
+			.replace(/{{title}}/g, (data.description || 'tiktok').replace(/#[\w\u00c0-\u024f\u1e00-\u1eff]+/gi, '').substring(0, 50).replace(/[^\w\s-]/g, ''));
 	}
 
 	private generateNoteTitle(data: any): string {
 		// Simply remove hashtags from description for cleaner titles
 		let cleanDescription = (data.description || 'Unknown');
 		
-		// Remove hashtags (#word) 
-		cleanDescription = cleanDescription.replace(/#\w+/g, '').trim();
+		// Remove hashtags (using same pattern as extractHashtags)
+		cleanDescription = cleanDescription.replace(/#[\w\u00c0-\u024f\u1e00-\u1eff]+/gi, '').trim();
 		
 		// Clean up multiple spaces
 		cleanDescription = cleanDescription.replace(/\s+/g, ' ').trim();
@@ -1340,7 +1349,7 @@ export default class TikTokerPlugin extends Plugin {
 		}
 		
 		return this.settings.noteTitleTemplate
-			.replace(/{{date}}/g, data.createdDate || data.date || new Date().toISOString().split('T')[0])
+			.replace(/{{date}}/g, data.createdDate || data.date || this.getCurrentDateString())
 			.replace(/{{description}}/g, cleanDescription)
 			.replace(/{{author}}/g, data.author || 'Unknown');
 	}
@@ -1352,7 +1361,7 @@ export default class TikTokerPlugin extends Plugin {
 			content += '---\n';
 			if (this.settings.includeAuthor) content += `author: ${data.author}\n`;
 			if (this.settings.includeDateCreated) {
-				content += `created: ${data.createdDate || data.date || new Date().toISOString().split('T')[0]}\n`;
+				content += `created: ${data.createdDate || data.date || this.getCurrentDateString()}\n`;
 			}
 			// Add TikTok posted date
 			if (data.postedDate && data.postedDate !== (data.createdDate || data.date)) {
