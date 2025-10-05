@@ -1,8 +1,4 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile } from 'obsidian';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import * as fs from 'fs';
-import * as path from 'path';
 
 interface TikTokerSettings {
 	outputFolder: string;
@@ -162,10 +158,18 @@ export default class TikTokerPlugin extends Plugin {
 
 	private async processTikTokUrl(url: string) {
 		try {
-			const expandedUrl = await this.expandUrl(url);
+			// For mobile /t/ URLs, skip expansion and use original URL for oEmbed
+			let urlToProcess = url;
+			if (Platform.isMobile && url.includes('/t/')) {
+				this.debugLog('Mobile: Using original /t/ URL for oEmbed, skipping expansion');
+				urlToProcess = url; // Use original /t/ URL
+			} else {
+				urlToProcess = await this.expandUrl(url);
+			}
+
 			new Notice('Fetching TikTok data...');
-			
-			const tikTokData = await this.fetchTikTokData(expandedUrl, false);
+
+			const tikTokData = await this.fetchTikTokData(urlToProcess, false);
 			await this.createTikTokNote(tikTokData, false);
 		} catch (error) {
 			new Notice('Failed to process TikTok URL');
@@ -174,36 +178,42 @@ export default class TikTokerPlugin extends Plugin {
 	}
 
 	private async fetchTikTokData(url: string, isBulkProcessing: boolean = false) {
-		// On mobile, skip oEmbed entirely and use fallback methods for better reliability
-		if (Platform.isMobile) {
-			this.debugLog('Mobile detected, using fallback methods');
-			return await this.fetchTikTokDataMobile(url, isBulkProcessing);
-		}
+		// Try desktop oEmbed approach first for both desktop and mobile
+		// Mobile will fall back to mobile-specific processing if oEmbed fails
 		
-		// Desktop: Use existing oEmbed-first approach
+		// Use same oEmbed approach for both desktop and mobile
 		const videoId = this.extractVideoId(url);
 		this.debugLog('Video ID extracted:', videoId);
-		
+
 		// Check if this is a slideshow URL (contains /photo/)
 		const isSlideshow = url.includes('/photo/');
 		if (isSlideshow) {
 			this.debugLog('Detected slideshow URL:', url);
 			return await this.handleSlideshowUrl(url, videoId, isBulkProcessing);
 		}
-		
+
 		try {
 			const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`;
 			this.debugLog('Attempting oEmbed:', oembedUrl);
-			
+
 			const controller = new AbortController();
 			setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
 
-			const response = await this.makeHttpRequest(oembedUrl, {
-				signal: controller.signal,
-				headers: {
-					'User-Agent': 'Mozilla/5.0 (compatible; TikToker-Plugin/1.0)'
-				}
-			});
+			// Use different request methods for desktop vs mobile due to CORS
+			const response = Platform.isMobile
+				? await this.makeHttpRequest(oembedUrl, {
+					signal: controller.signal,
+					headers: {
+						'User-Agent': 'Mozilla/5.0 (compatible; TikToker-Plugin/1.0)'
+					}
+				})
+				: await fetch(oembedUrl, {
+					method: 'GET',
+					signal: controller.signal,
+					headers: {
+						'User-Agent': 'Mozilla/5.0 (compatible; TikToker-Plugin/1.0)'
+					}
+				});
 
 			if (!response.ok) {
 				throw new Error(`oEmbed request failed: ${response.status}`);
@@ -249,7 +259,13 @@ export default class TikTokerPlugin extends Plugin {
 			if (isPrivateVideo) {
 				return await this.handlePrivateVideo(url, videoId, isBulkProcessing);
 			}
-			
+
+			// On mobile, try mobile-specific processing as fallback
+			if (Platform.isMobile) {
+				this.debugLog('Desktop oEmbed failed on mobile, trying mobile fallback processing');
+				return await this.fetchTikTokDataMobile(url, isBulkProcessing);
+			}
+
 			if (!isBulkProcessing) {
 				new Notice('oEmbed failed, using fallback embed method');
 			}
@@ -301,13 +317,100 @@ export default class TikTokerPlugin extends Plugin {
 
 	private async fetchTikTokDataMobile(url: string, isBulkProcessing: boolean = false) {
 		this.debugLog('Mobile processing for URL:', url);
-		
-		// First, expand short URLs (like /t/ format) to get the full URL with author info
-		const expandedUrl = await this.expandUrl(url);
-		this.debugLog('Expanded URL:', expandedUrl);
-		
-		// Extract video ID from expanded URL
-		const videoId = this.extractVideoId(expandedUrl);
+
+		// For /t/ URLs, try oEmbed directly on the original URL first (like desktop)
+		const isShortUrl = this.identifyShortUrlPattern(url).requiresExpansion;
+		let videoId: string | null = null;
+		let oembedSuccess = false;
+		let expandedUrl = url;
+
+		if (isShortUrl && url.includes('/t/')) {
+			this.debugLog('Mobile: /t/ URL detected, trying oEmbed on original URL first');
+			try {
+				const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`;
+				this.debugLog('Mobile: Attempting oEmbed on original /t/ URL:', oembedUrl);
+
+				const controller = new AbortController();
+				setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
+
+				const response = await this.makeHttpRequest(oembedUrl, {
+					signal: controller.signal,
+					headers: {
+						'User-Agent': 'Mozilla/5.0 (compatible; TikToker-Plugin/1.0)'
+					}
+				});
+
+				if (response.ok) {
+					const oembedData = await response.json();
+					this.debugLog('Mobile: oEmbed success on /t/ URL, extracting video ID');
+
+					if (oembedData.html) {
+						const videoIdMatch = oembedData.html.match(/data-video-id="(\d+)"/);
+						if (videoIdMatch && videoIdMatch[1]) {
+							videoId = videoIdMatch[1];
+							oembedSuccess = true;
+							this.debugLog('Mobile: Correct video ID from /t/ oEmbed:', videoId);
+
+							// Extract author from oEmbed data if possible
+							const authorMatch = oembedData.html.match(/@([^/\s"]+)/);
+							if (authorMatch && authorMatch[1]) {
+								expandedUrl = `https://www.tiktok.com/@${authorMatch[1]}/video/${videoId}`;
+								this.debugLog('Mobile: Reconstructed expanded URL:', expandedUrl);
+							}
+						}
+					}
+				} else {
+					throw new Error(`oEmbed request failed: ${response.status}`);
+				}
+			} catch (error) {
+				this.debugLog('Mobile: oEmbed on /t/ URL failed:', error?.message);
+			}
+		}
+
+		// If /t/ oEmbed failed or not a /t/ URL, try URL expansion
+		if (!oembedSuccess) {
+			expandedUrl = await this.expandUrl(url);
+			this.debugLog('Expanded URL:', expandedUrl);
+
+			videoId = this.extractVideoId(expandedUrl);
+			this.debugLog('Mobile: Video ID from expanded URL:', videoId);
+
+			// Try oEmbed on expanded URL as fallback
+			this.debugLog('Mobile: Trying oEmbed on expanded URL...');
+			try {
+				const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(expandedUrl)}`;
+				this.debugLog('Mobile: Attempting oEmbed for correct video ID:', oembedUrl);
+
+				const controller = new AbortController();
+				setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
+
+				const response = await this.makeHttpRequest(oembedUrl, {
+					signal: controller.signal,
+					headers: {
+						'User-Agent': 'Mozilla/5.0 (compatible; TikToker-Plugin/1.0)'
+					}
+				});
+
+				if (!response.ok) {
+					throw new Error(`oEmbed request failed: ${response.status}`);
+				}
+
+				const oembedData = await response.json();
+				this.debugLog('Mobile: oEmbed success, extracting correct video ID');
+
+				if (oembedData.html) {
+					const videoIdMatch = oembedData.html.match(/data-video-id="(\d+)"/);
+					if (videoIdMatch && videoIdMatch[1]) {
+						videoId = videoIdMatch[1];
+						oembedSuccess = true;
+						this.debugLog('Mobile: Correct video ID from oEmbed:', videoId);
+					}
+				}
+			} catch (error) {
+				this.debugLog('Mobile: oEmbed on expanded URL failed:', error?.message);
+			}
+		}
+
 		this.debugLog('Mobile Video ID:', videoId);
 		
 		// Check if this is a slideshow URL (contains /photo/)
@@ -317,28 +420,76 @@ export default class TikTokerPlugin extends Plugin {
 			return await this.handleSlideshowUrl(expandedUrl, videoId, isBulkProcessing);
 		}
 		
-		// Extract author from expanded URL
+		// Enhanced author extraction with fallbacks for mobile URLs
 		const authorWithAt = this.extractAuthorFromUrl(expandedUrl);
 		const author = authorWithAt.replace('@', ''); // Remove @ for properties
 		
-		// Check for private video indicators in URL expansion
-		if (author === 'Unknown' || !videoId) {
-			this.debugLog('Mobile: possible private video or parsing failure');
-			// This might be a private video - use URL as fallback
-			return await this.handlePrivateVideo(expandedUrl, videoId, isBulkProcessing);
+		// Check if we're still dealing with a short URL (expansion failed)
+		const isStillShortUrl = url === expandedUrl && this.identifyShortUrlPattern(url).requiresExpansion;
+		
+		// Improved private video detection - try alternative methods for mobile
+		if (author === 'Unknown' || !videoId || isStillShortUrl) {
+			this.debugLog('Mobile: handling short URL or parsing failure');
+			
+			if (isStillShortUrl) {
+				// URL expansion failed - this is normal for mobile TikTok short URLs
+				this.debugLog('Mobile: Creating optimized embed for short URL (TikTok limitation)');
+				const shortUrlPattern = this.identifyShortUrlPattern(url).pattern;
+				const description = shortUrlPattern === '/t/' ? 'TikTok Video' : 'TikTok Video (Short Link)';
+				
+				// Create a more user-friendly embed that might work in the iframe
+				// Some TikTok short URLs can work in iframes even if server-side expansion fails
+				const embedHtml = `<div class="tiktok-embed">
+	<blockquote class="tiktok-embed" cite="${url}" data-video-id="" style="max-width: 605px;min-width: 325px;">
+		<section>
+			<a target="_blank" title="${description}" href="${url}">${description}</a>
+		</section>
+	</blockquote>
+	<script async src="https://www.tiktok.com/embed.js"></script>
+</div>`;
+				
+				const markdownFallback = `\n\n**TikTok Link**: [Open in TikTok](${url})\n\n*This TikTok video uses a mobile short link. Click above to view in the TikTok app or browser.*`;
+				
+				return {
+					author: 'Unknown',
+					description: description,
+					hashtags: ['tiktoker'],
+					url: url,
+					expandedUrl: url,
+					embedHtml: embedHtml + markdownFallback,
+					videoId: null,
+					createdDate: new Date().toISOString().split('T')[0],
+					postedDate: new Date().toISOString().split('T')[0],
+					transcription: '',
+					oembedFailed: true,
+					mobileOptimized: true,
+					shortUrlHandled: true
+				};
+			} else {
+				// For mobile short URLs with some expansion, try enhanced data extraction
+				const enhancedData = await this.extractDataFromShortUrl(url, expandedUrl);
+				if (enhancedData.success && enhancedData.data) {
+					this.debugLog('Enhanced extraction successful');
+					return enhancedData.data;
+				}
+				
+				// Fall back to private video handling
+				this.debugLog('Mobile: falling back to private video handling');
+				return await this.handlePrivateVideo(expandedUrl, videoId, isBulkProcessing);
+			}
 		}
 		
 		const postedDate = await this.extractTikTokPostedDate(expandedUrl, videoId);
 		
-		// For mobile, create a simple iframe embed (skip oEmbed entirely)
+		// Enhanced embed creation with better mobile compatibility
 		const embedHtml = this.createObsidianCompatibleEmbed(null, videoId, expandedUrl);
-		const description = `TikTok from ${authorWithAt}`;
+		const description = author !== 'tiktok' ? `TikTok from ${authorWithAt}` : 'TikTok Video';
 		
-		// Add markdown image fallback for mobile in case iframe doesn't work
-		const markdownFallback = `\n\n![${description}](${expandedUrl})`;
+		// Improved markdown fallback with original URL preservation
+		const markdownFallback = `\n\n**Original URL**: ${url}${url !== expandedUrl ? `\n**Expanded URL**: ${expandedUrl}` : ''}\n\n![${description}](${expandedUrl})`;
 		const finalEmbedHtml = embedHtml + markdownFallback;
 		
-		this.debugLog('Mobile processing complete with markdown fallback');
+		this.debugLog('Mobile processing complete with enhanced fallback');
 		return {
 			author: author,
 			description: description,
@@ -350,7 +501,8 @@ export default class TikTokerPlugin extends Plugin {
 			createdDate: new Date().toISOString().split('T')[0],
 			postedDate: postedDate,
 			transcription: '', // Will be filled asynchronously
-			oembedFailed: true // Mark as oEmbed failed since we skipped it
+			oembedFailed: true, // Mark as oEmbed failed since we skipped it
+			mobileOptimized: true // Flag to indicate this was processed with mobile optimizations
 		};
 	}
 
@@ -550,22 +702,205 @@ export default class TikTokerPlugin extends Plugin {
 
 
 	private async expandUrl(url: string): Promise<string> {
-		if (url.includes('vm.tiktok.com') || url.includes('tiktok.com/t/')) {
+		this.debugLog('expandUrl called with:', url);
+
+		// Enhanced mobile URL pattern detection
+		const needsExpansion = this.identifyShortUrlPattern(url);
+
+		if (!needsExpansion.requiresExpansion) {
+			this.debugLog('URL does not require expansion');
+			return url;
+		}
+
+		this.debugLog(`Detected ${needsExpansion.pattern} pattern, attempting expansion`);
+
+		// For mobile /t/ URLs, use proper redirect following instead of HTML parsing
+		if (Platform.isMobile && needsExpansion.pattern === '/t/') {
+			this.debugLog('Mobile: Using proper redirect following for /t/ URL');
 			try {
 				const controller = new AbortController();
 				setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
-				
-				const response = await this.makeHeadRequest(url, {
+
+				// Use fetch (like desktop) to get proper redirect URL
+				const response = await fetch(url, {
+					method: 'GET',
 					redirect: 'follow',
-					signal: controller.signal
+					signal: controller.signal,
+					headers: {
+						'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_6_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1',
+						'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+					}
 				});
-				return response.url;
+
+				// Check the final redirected URL
+				const finalUrl = response.url;
+				if (finalUrl && finalUrl !== url && this.isValidTikTokVideoUrl(finalUrl)) {
+					this.debugLog('Mobile: Successfully followed /t/ redirect to:', finalUrl);
+					return finalUrl;
+				}
+
+				this.debugLog('Mobile: /t/ redirect did not resolve to valid video URL, response URL:', finalUrl);
+
 			} catch (error) {
-				console.warn('Failed to expand URL, using original:', error);
-				return url;
+				this.debugLog('Mobile: /t/ redirect following failed:', error);
 			}
 		}
+
+		// Try network-based expansion for other patterns or as fallback
+		try {
+			const controller = new AbortController();
+			setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
+
+			const response = await this.makeHeadRequest(url, {
+				redirect: 'follow',
+				signal: controller.signal
+			});
+
+			if (response.url && response.url !== url && this.isValidTikTokVideoUrl(response.url)) {
+				this.debugLog('Network expansion successful:', response.url);
+				return response.url;
+			} else {
+				// Check if we got TikTok's generic landing page (indicates short URL redirect limitation)
+				if (response.url === url && Platform.isMobile) {
+					this.debugLog('Mobile: Got original short URL - TikTok server did not redirect (normal behavior)');
+					// On mobile, this is expected - TikTok short URLs require browser environment
+					// We'll handle this later in mobile processing by using the short URL directly
+				}
+			}
+		} catch (error) {
+			this.debugLog('Network expansion failed:', error);
+		}
+
+		// If network expansion fails, use original URL on both desktop and mobile
+		// Mobile processing will handle short URLs specially later
+		if (Platform.isMobile) {
+			this.debugLog('Mobile: Network expansion failed, will handle short URL in mobile processing');
+		} else {
+			this.debugLog('Desktop: Network expansion failed, using original URL for oEmbed');
+		}
+
+		this.debugLog('All expansion methods failed, using original URL');
 		return url;
+	}
+
+	// Enhanced URL pattern identification for better mobile support
+	private identifyShortUrlPattern(url: string): {requiresExpansion: boolean, pattern: string} {
+		if (url.includes('vm.tiktok.com')) {
+			return {requiresExpansion: true, pattern: 'vm.tiktok.com'};
+		}
+		if (url.includes('tiktok.com/t/')) {
+			return {requiresExpansion: true, pattern: '/t/'};
+		}
+		if (url.includes('m.tiktok.com/v/')) {
+			return {requiresExpansion: true, pattern: 'm.tiktok.com'};
+		}
+		// Check for other short URL patterns
+		if (url.match(/tiktok\.com\/[a-zA-Z0-9]{4,12}\/?$/)) {
+			return {requiresExpansion: true, pattern: 'short-code'};
+		}
+		return {requiresExpansion: false, pattern: 'none'};
+	}
+	
+	// Generate fallback URLs when network expansion fails
+	private generateFallbackExpandedUrl(url: string, pattern: string): string | null {
+		switch (pattern) {
+			case '/t/': {
+				const match = url.match(/tiktok\.com\/t\/([A-Za-z0-9]+)/);
+				if (match) {
+					// Create a plausible expanded URL structure for /t/ format
+					// This helps with author extraction and video ID parsing
+					const shortCode = match[1];
+					// Generate a mock video ID based on the short code (for consistency)
+					const mockVideoId = this.generateMockVideoId(shortCode);
+					return `https://www.tiktok.com/@tiktok/video/${mockVideoId}?is_from_webapp=1&sender_device=mobile&web_id=${shortCode}`;
+				}
+				break;
+			}
+			case 'vm.tiktok.com': {
+				const match = url.match(/vm\.tiktok\.com\/([A-Za-z0-9]+)/);
+				if (match) {
+					const shortCode = match[1];
+					const mockVideoId = this.generateMockVideoId(shortCode);
+					return `https://www.tiktok.com/@tiktok/video/${mockVideoId}?is_from_webapp=1&sender_device=pc&web_id=${shortCode}`;
+				}
+				break;
+			}
+			case 'm.tiktok.com': {
+				const match = url.match(/m\.tiktok\.com\/v\/([0-9]+)/);
+				if (match) {
+					return `https://www.tiktok.com/@tiktok/video/${match[1]}?is_from_webapp=1&sender_device=mobile`;
+				}
+				break;
+			}
+		}
+		return null;
+	}
+	
+	// Generate consistent mock video IDs for fallback URLs
+	private generateMockVideoId(shortCode: string): string {
+		// Create a deterministic but realistic-looking video ID
+		let hash = 0;
+		for (let i = 0; i < shortCode.length; i++) {
+			const char = shortCode.charCodeAt(i);
+			hash = ((hash << 5) - hash + char) & 0xffffffff;
+		}
+		// Convert to positive and ensure it's a 19-digit number like real TikTok IDs  
+		const positiveHash = Math.abs(hash);
+		const paddedHash = positiveHash.toString().padStart(18, '0');
+		const videoId = '7' + paddedHash.slice(0, 18);
+		return videoId;
+	}
+	
+	// Check if a URL is a valid TikTok video URL
+	private isValidTikTokVideoUrl(url: string): boolean {
+		return url.includes('tiktok.com') && 
+			   (url.includes('/video/') || url.includes('/photo/')) && 
+			   !url.includes('/t/') && 
+			   !url.includes('vm.tiktok.com');
+	}
+
+	// Enhanced data extraction for short URLs when standard expansion fails
+	private async extractDataFromShortUrl(originalUrl: string, expandedUrl: string): Promise<{success: boolean, data?: any}> {
+		this.debugLog('Attempting enhanced short URL data extraction');
+		
+		try {
+			// Create a reasonable description based on the URL pattern
+			let description = 'TikTok Video';
+			let author = 'Unknown';
+			
+			// Try to identify the type of short URL and adjust accordingly
+			if (originalUrl.includes('/t/')) {
+				description = 'TikTok Video (Mobile Link)';
+			} else if (originalUrl.includes('vm.tiktok.com')) {
+				description = 'TikTok Video (Shared Link)';
+			}
+			
+			// Don't create iframe embeds with potentially fake video IDs
+			// Instead create a simple markdown link
+			const embedHtml = `[${description}](${originalUrl})\n\n*This TikTok link could not be fully processed for embedding. Click the link above to view in TikTok.*\n\n**Original URL**: ${originalUrl}`;
+			
+			return {
+				success: true,
+				data: {
+					author: author,
+					description: description,
+					hashtags: [],
+					url: originalUrl,
+					expandedUrl: expandedUrl,
+					embedHtml: embedHtml,
+					videoId: null,
+					createdDate: new Date().toISOString().split('T')[0],
+					postedDate: new Date().toISOString().split('T')[0],
+					transcription: '',
+					oembedFailed: true,
+					mobileOptimized: true,
+					shortUrlProcessed: true
+				}
+			};
+		} catch (error) {
+			this.debugLog('Enhanced short URL extraction failed:', error);
+			return {success: false};
+		}
 	}
 
 	private extractVideoId(url: string): string | null {
@@ -575,33 +910,164 @@ export default class TikTokerPlugin extends Plugin {
 
 	private extractFinalUrlFromResponse(htmlContent: string, fallbackUrl: string): string {
 		try {
-			// Look for canonical URL in HTML head
-			const canonicalMatch = htmlContent.match(/<link[^>]*rel=['"]\s*canonical\s*['"][^>]*href=['"]([^'"]+)['"][^>]*>/i);
-			if (canonicalMatch && canonicalMatch[1]) {
-				const canonicalUrl = canonicalMatch[1];
-				// Make sure it's a valid TikTok URL
-				if (canonicalUrl.includes('tiktok.com') && canonicalUrl.includes('/video/')) {
-					return canonicalUrl;
+			this.debugLog('Extracting URL from HTML response, content length:', htmlContent.length);
+
+			// Enhanced mobile patterns for TikTok URL extraction
+			const patterns = [
+				// Look for window.location or location.href redirects in JavaScript
+				{
+					name: 'js-location-redirect',
+					regex: /(?:window\.location|location\.href)\s*=\s*['"]([^'"]*tiktok\.com[^'"]*\/(?:video|@)[^'"]+)['"]/i
+				},
+				// Look for URL in TikTok's internal routing and data attributes
+				{
+					name: 'tiktok-internal-url',
+					regex: /"(?:canonical_)?url":\s*"(https:\/\/[^"]*tiktok\.com[^"]*\/(?:video|@)[^"]+)"/i
+				},
+				// Mobile-specific: Look for React/Next.js router data
+				{
+					name: 'react-router-data',
+					regex: /"router":\s*{[^}]*"asPath":\s*"([^"]*\/(?:@[^"\/]+\/video\/\d+|video\/\d+)[^"]*)"/i
+				},
+				// Mobile-specific: Look for SEO data structures
+				{
+					name: 'seo-data',
+					regex: /"seo":\s*{[^}]*"canonicalHref":\s*"(https:\/\/[^"]*tiktok\.com[^"]*\/(?:video|@)[^"]+)"/i
+				},
+				// Mobile-specific: Look for pageProps data
+				{
+					name: 'page-props',
+					regex: /"pageProps":\s*{[^}]*"videoData"[^}]*"itemInfos"[^}]*"id":\s*"(\d+)"/i,
+					isVideoId: true
+				},
+				// Look for video ID in various mobile data structures
+				{
+					name: 'mobile-video-id',
+					regex: /"itemId":\s*"(\d+)"/i,
+					isVideoId: true
+				},
+				// Enhanced author and video ID extraction for mobile
+				{
+					name: 'mobile-author-video',
+					regex: /"author":\s*{[^}]*"uniqueId":\s*"([^"]+)"[^}]*}[^}]*"id":\s*"(\d+)"/i,
+					isAuthorVideo: true
+				},
+				// Standard meta tags (fallback)
+				{
+					name: 'canonical',
+					regex: /<link[^>]*rel=['"]\s*canonical\s*['"][^>]*href=['"]([^'"]+)['"][^>]*>/i
+				},
+				{
+					name: 'og:url',
+					regex: /<meta[^>]*property=['"]og:url['"][^>]*content=['"]([^'"]+)['"][^>]*>/i
+				}
+			];
+
+			for (const pattern of patterns) {
+				const match = htmlContent.match(pattern.regex);
+				if (match) {
+					if (pattern.isVideoId && match[1]) {
+						// Extract video ID and construct URL
+						const videoId = match[1];
+						const constructedUrl = `https://www.tiktok.com/@unknown/video/${videoId}`;
+						this.debugLog(`Found video ID via ${pattern.name}: ${videoId}, constructed URL: ${constructedUrl}`);
+
+						// Try to find the author for this video ID
+						const authorMatch = htmlContent.match(new RegExp(`"uniqueId":\\s*"([^"]+)"[^}]*}[^}]*"id":\\s*"${videoId}"`));
+						if (authorMatch && authorMatch[1]) {
+							const finalUrl = `https://www.tiktok.com/@${authorMatch[1]}/video/${videoId}`;
+							this.debugLog(`Found author for video: @${authorMatch[1]}, final URL: ${finalUrl}`);
+							return finalUrl;
+						}
+						return constructedUrl;
+					} else if (pattern.isAuthorVideo && match[1] && match[2]) {
+						// Extract both author and video ID
+						const author = match[1];
+						const videoId = match[2];
+						const constructedUrl = `https://www.tiktok.com/@${author}/video/${videoId}`;
+						this.debugLog(`Found author and video via ${pattern.name}: @${author}, video: ${videoId}`);
+						return constructedUrl;
+					} else if (match[1]) {
+						let url = match[1];
+
+						// Clean up escaped characters
+						url = url.replace(/\\u002F/g, '/').replace(/\\/g, '');
+
+						this.debugLog(`Found URL via ${pattern.name}: ${url}`);
+
+						// More flexible URL validation - allow both /video/ and /photo/
+						if (url.includes('tiktok.com') && (url.includes('/video/') || url.includes('/photo/') || url.includes('/@'))) {
+							// Additional validation: must not be the same short URL
+							if (url !== fallbackUrl && !url.includes('/t/')) {
+								this.debugLog(`Valid expanded URL found: ${url}`);
+								return url;
+							}
+						}
+					}
 				}
 			}
 
-			// Look for og:url meta tag
-			const ogUrlMatch = htmlContent.match(/<meta[^>]*property=['"]og:url['"][^>]*content=['"]([^'"]+)['"][^>]*>/i);
-			if (ogUrlMatch && ogUrlMatch[1]) {
-				const ogUrl = ogUrlMatch[1];
-				if (ogUrl.includes('tiktok.com') && ogUrl.includes('/video/')) {
-					return ogUrl;
+			// Enhanced mobile-specific extraction: Look for Next.js data or React props
+			if (Platform.isMobile) {
+				this.debugLog('Mobile: Trying enhanced extraction patterns...');
+
+				// Look for Next.js __NEXT_DATA__ script tag
+				const nextDataMatch = htmlContent.match(/<script[^>]*id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
+				if (nextDataMatch) {
+					try {
+						const nextData = JSON.parse(nextDataMatch[1]);
+						if (nextData.props?.pageProps?.itemInfo?.itemStruct?.id) {
+							const videoId = nextData.props.pageProps.itemInfo.itemStruct.id;
+							const author = nextData.props.pageProps.itemInfo.itemStruct.author?.uniqueId || 'unknown';
+							const constructedUrl = `https://www.tiktok.com/@${author}/video/${videoId}`;
+							this.debugLog(`Mobile: Found video in Next.js data: ${constructedUrl}`);
+							return constructedUrl;
+						}
+					} catch (e) {
+						this.debugLog('Mobile: Failed to parse Next.js data:', e);
+					}
+				}
+
+				// Look for window.__UNIVERSAL_DATA_FOR_REHYDRATION__
+				const universalDataMatch = htmlContent.match(/window\.__UNIVERSAL_DATA_FOR_REHYDRATION__\s*=\s*({.*?});/s);
+				if (universalDataMatch) {
+					try {
+						const universalData = JSON.parse(universalDataMatch[1]);
+						if (universalData.default?.ItemModule) {
+							const itemModule = universalData.default.ItemModule;
+							for (const [key, item] of Object.entries(itemModule)) {
+								if (typeof item === 'object' && item && 'id' in item && 'author' in item) {
+									const videoData = item as any;
+									const constructedUrl = `https://www.tiktok.com/@${videoData.author.uniqueId}/video/${videoData.id}`;
+									this.debugLog(`Mobile: Found video in universal data: ${constructedUrl}`);
+									return constructedUrl;
+								}
+							}
+						}
+					} catch (e) {
+						this.debugLog('Mobile: Failed to parse universal data:', e);
+					}
 				}
 			}
 
-			// Look for URL in JavaScript variables (common in TikTok pages)
-			const jsUrlMatch = htmlContent.match(/"canonical_url":\s*"([^"]+)"/i);
-			if (jsUrlMatch && jsUrlMatch[1]) {
-				const jsUrl = jsUrlMatch[1].replace(/\\u002F/g, '/');
-				if (jsUrl.includes('tiktok.com') && jsUrl.includes('/video/')) {
-					return jsUrl;
+			// Last resort: search through the entire content for any TikTok video URLs
+			this.debugLog('Patterns failed, searching entire content for TikTok URLs...');
+			const globalUrlPattern = /https:\/\/[^"\s]*tiktok\.com[^"\s]*\/(?:@[^\/\s"]+\/video\/\d+|video\/\d+)/gi;
+			const globalMatches = htmlContent.match(globalUrlPattern);
+
+			if (globalMatches && globalMatches.length > 0) {
+				// Take the first valid match
+				for (const match of globalMatches) {
+					if (match !== fallbackUrl && !match.includes('/t/')) {
+						this.debugLog(`Found video URL in content: ${match}`);
+						return match;
+					}
 				}
 			}
+
+			// If still no expanded URL found, log a sample of the content for debugging
+			const contentSample = htmlContent.substring(0, 500).replace(/\n/g, ' ');
+			this.debugLog('No expanded URL found in response. Content sample:', contentSample);
 
 			return fallbackUrl;
 		} catch (error) {
@@ -648,48 +1114,132 @@ export default class TikTokerPlugin extends Plugin {
 	}
 
 	private async makeHeadRequest(url: string, options: {redirect?: string, signal?: AbortSignal, headers?: Record<string, string>} = {}): Promise<{url: string, headers: {get: (key: string) => string | null}}> {
+		// Enhanced mobile user agents for better compatibility
+		const mobileUserAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+		const desktopUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+		
 		if (Platform.isMobile) {
-			// On mobile, use GET request to properly follow redirects and get final URL
+			// Simplified mobile approach - get the JavaScript content and parse it for the video URL
+			this.debugLog('Mobile: Fetching TikTok page to extract JavaScript redirect URL');
+			
 			try {
 				const response = await requestUrl({
 					url: url,
 					method: 'GET',
 					headers: {
-						'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-						...(options.headers || {})
+						'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_6_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1',
+						'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+						'accept-language': 'en-US,en;q=0.9',
+						'accept-encoding': 'gzip, deflate, br',
+						'sec-fetch-dest': 'document',
+						'sec-fetch-mode': 'navigate',
+						'sec-fetch-site': 'none',
+						'sec-fetch-user': '?1',
+						'cache-control': 'max-age=0'
 					}
 				});
 				
-				// Extract final URL from response - check for canonical URLs in HTML or use response URL
+				this.debugLog(`Mobile request succeeded - status: ${response.status}, content length: ${response.text.length}`);
+				
+				// Extract the actual video URL from the JavaScript content
 				const finalUrl = this.extractFinalUrlFromResponse(response.text, url);
 				
-				return { 
-					url: finalUrl,
-					headers: {
-						get: (key: string) => response.headers[key] || null
+				if (finalUrl !== url && this.isValidTikTokVideoUrl(finalUrl)) {
+					this.debugLog(`Mobile: Successfully extracted video URL: ${finalUrl}`);
+					return { 
+						url: finalUrl,
+						headers: {
+							get: (key: string) => response.headers[key] || null
+						}
+					};
+				} else {
+					this.debugLog('Mobile: Could not extract video URL from JavaScript content');
+
+					// Try alternative mobile approach: use different user agent
+					try {
+						this.debugLog('Mobile: Trying alternative extraction with different user agent...');
+						const altResponse = await requestUrl({
+							url: url,
+							method: 'GET',
+							headers: {
+								'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/131.0.6778.104 Mobile/15E148 Safari/604.1',
+								'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+								'accept-language': 'en-US,en;q=0.9',
+								'sec-ch-ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+								'sec-ch-ua-mobile': '?1',
+								'sec-ch-ua-platform': '"iOS"',
+								'sec-fetch-dest': 'document',
+								'sec-fetch-mode': 'navigate',
+								'sec-fetch-site': 'none'
+							}
+						});
+
+						const altFinalUrl = this.extractFinalUrlFromResponse(altResponse.text, url);
+						if (altFinalUrl !== url && this.isValidTikTokVideoUrl(altFinalUrl)) {
+							this.debugLog(`Mobile: Alternative extraction successful: ${altFinalUrl}`);
+							return {
+								url: altFinalUrl,
+								headers: {
+									get: (key: string) => altResponse.headers[key] || null
+								}
+							};
+						}
+
+					} catch (altError) {
+						this.debugLog('Mobile: Alternative extraction also failed:', altError?.message);
 					}
+				}
+
+			} catch (error) {
+				this.debugLog('Mobile URL expansion failed:', error?.message);
+			}
+
+			// Return original URL if extraction failed
+			this.debugLog('Mobile: Using original short URL');
+			return {
+				url: url,
+				headers: {
+					get: () => null
+				}
+			};
+		} else {
+			// Enhanced desktop handling - try both methods for reliability
+			try {
+				const response = await fetch(url, {
+					method: 'HEAD',
+					redirect: (options.redirect as RequestRedirect) || 'follow',
+					signal: options.signal,
+					headers: {
+						'user-agent': desktopUserAgent,
+						...(options.headers || {})
+					}
+				});
+				return { 
+					url: response.url,
+					headers: response.headers
 				};
 			} catch (error) {
-				this.debugLog('Mobile URL expansion failed, using original URL:', error);
-				return { 
-					url: url,
-					headers: {
-						get: () => null
-					}
-				};
+				// Desktop fallback: try GET if HEAD fails
+				this.debugLog('Desktop HEAD request failed, trying GET:', error);
+				try {
+					const getResponse = await fetch(url, {
+						method: 'GET',
+						redirect: (options.redirect as RequestRedirect) || 'follow',
+						signal: options.signal,
+						headers: {
+							'user-agent': desktopUserAgent,
+							...(options.headers || {})
+						}
+					});
+					return { 
+						url: getResponse.url,
+						headers: getResponse.headers
+					};
+				} catch (getError) {
+					this.debugLog('All desktop expansion attempts failed:', getError);
+					throw getError;
+				}
 			}
-		} else {
-			// Use standard fetch on desktop (preserve existing functionality)
-			const response = await fetch(url, {
-				method: 'HEAD',
-				redirect: (options.redirect as RequestRedirect) || 'follow',
-				signal: options.signal,
-				headers: options.headers
-			});
-			return { 
-				url: response.url,
-				headers: response.headers
-			};
 		}
 	}
 
@@ -775,9 +1325,23 @@ export default class TikTokerPlugin extends Plugin {
 	}
 
 	private generateNoteTitle(data: any): string {
+		// Simply remove hashtags from description for cleaner titles
+		let cleanDescription = (data.description || 'Unknown');
+		
+		// Remove hashtags (#word) 
+		cleanDescription = cleanDescription.replace(/#\w+/g, '').trim();
+		
+		// Clean up multiple spaces
+		cleanDescription = cleanDescription.replace(/\s+/g, ' ').trim();
+		
+		// Limit length for cleaner titles
+		if (cleanDescription.length > 80) {
+			cleanDescription = cleanDescription.substring(0, 80).trim() + '...';
+		}
+		
 		return this.settings.noteTitleTemplate
 			.replace(/{{date}}/g, data.createdDate || data.date || new Date().toISOString().split('T')[0])
-			.replace(/{{description}}/g, data.description || 'Unknown')
+			.replace(/{{description}}/g, cleanDescription)
 			.replace(/{{author}}/g, data.author || 'Unknown');
 	}
 
@@ -1090,9 +1654,20 @@ export default class TikTokerPlugin extends Plugin {
 	}
 
 	private async getLocalTranscription(tiktokUrl: string): Promise<string> {
-		const execAsync = promisify(exec);
+		// Desktop-only feature - not available on mobile
+		if (Platform.isMobile) {
+			throw new Error('Local transcription is not available on mobile devices');
+		}
 
 		try {
+			// Dynamic import for desktop-only Node.js modules
+			const { exec } = await import('child_process');
+			const { promisify } = await import('util');
+			const fs = await import('fs');
+			const path = await import('path');
+			
+			const execAsync = promisify(exec);
+
 			// Check if script exists
 			if (!fs.existsSync(this.settings.whisperScriptPath)) {
 				throw new Error('Whisper script not found at configured path');
@@ -1247,7 +1822,9 @@ export default class TikTokerPlugin extends Plugin {
 			this.activeTranscriptionModal.close();
 		}
 		
-		this.activeTranscriptionModal = new SingleTranscriptionModal(this.app, path.basename(filePath, '.md'), data, this);
+		// Extract filename without extension (mobile-compatible)
+		const fileName = filePath.split('/').pop()?.replace(/\.md$/, '') || 'TikTok';
+		this.activeTranscriptionModal = new SingleTranscriptionModal(this.app, fileName, data, this);
 		this.activeTranscriptionModal.open();
 		
 		await this.startAsyncTranscription(url, videoId, filePath, false, (status: string, timeElapsed?: number) => {
@@ -1301,9 +1878,22 @@ export default class TikTokerPlugin extends Plugin {
 	}
 
 	private async getWhisperLocalTranscription(url: string, videoId: string | null, isBulkProcessing: boolean = false): Promise<string> {
-		const execAsync = promisify(exec);
+		// Desktop-only feature - not available on mobile
+		if (Platform.isMobile) {
+			if (!isBulkProcessing) {
+				new Notice('Local transcription is not available on mobile devices');
+			}
+			return '';
+		}
 
 		try {
+			// Dynamic import for desktop-only Node.js modules
+			const { exec } = await import('child_process');
+			const { promisify } = await import('util');
+			const fs = await import('fs');
+			
+			const execAsync = promisify(exec);
+
 			if (!this.settings.whisperScriptPath) {
 				if (!isBulkProcessing) {
 					new Notice('Whisper script path not configured');

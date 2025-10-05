@@ -20,5 +20,12 @@
   },
   "include": [
     "**/*.ts"
+  ],
+  "exclude": [
+    "node_modules/**/*",
+    "test/**/*",
+    "*.js",
+    "*.mjs",
+    "*-backup.ts"
   ]
 }
