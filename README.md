@@ -2,18 +2,53 @@
 
 Save TikTok videos as markdown notes with embedded content and metadata extraction.
 
+This plugin was built as a personal project to fit my workflow and habits around saving and reviewing TikTok content in Obsidian. After finding it useful, I decided to share it with the community. I am currently working on getting it approved for the Obsidian Community Plugins directory. 
+
 ## Features
 
-### Current Version (1.0.0)
+### Current Version (1.4.0)
 
-- **One-click TikTok saving**: Process TikTok URLs directly from your clipboard
-- **Embedded video playback**: View TikTok videos directly within Obsidian notes
-- **Metadata extraction**: Automatically fetches video title, author, description, and hashtags
-- **Smart file naming**: Customizable file naming patterns with template variables
-- **Duplicate handling**: Intelligent duplicate detection with user prompts
-- **Hashtag integration**: Automatically adds hashtags to note content and properties
-- **Properties support**: Adds structured metadata to note frontmatter
+#### Core Features
+- **Automatic note opening**: Created TikTok notes open immediately on both desktop and mobile (configurable)
+- **One-click saving**: Process TikTok URLs directly from your clipboard
+- **Embedded playback**: View TikTok videos within Obsidian notes
+- **Metadata extraction**: Automatically fetches title, author, description, and hashtags
+- **Smart file naming**: Customizable patterns with template variables
+- **Duplicate handling**: Intelligent detection with user prompts
+- **Hashtag integration**: Adds hashtags to content and properties
 - **Flexible templates**: Customize note titles and content layout
+- **Audio transcription**: Speech-to-text with Whisper or AssemblyAI
+- **Batch processing**: Handle multiple URLs at once
+
+#### Review Queue System
+A sidebar interface for reviewing and organizing saved TikToks:
+
+**Organization:**
+- Combined filters: Mix unwatched, watched, review again, and starred
+- Smart sorting: By date, author, or hashtags
+- Priority mode: Starred items always appear first
+- Progress tracking: Visual bar and counter showing position
+
+**Note Management:**
+- Tag management: Mark as watched, starred, review again, or skip
+- Quick notes: Add notes directly with dedicated section
+- Editable content: Edit description and transcription inline
+- Clickable hashtags: Opens global search
+- Undo support: Revert tag changes
+
+**Interface:**
+- Resizable embed: Adjust player size
+- Smooth transitions: Optional animations (configurable)
+- Smart navigation: Previous/next buttons
+- Open in new tab: Quick access to full note
+
+**Settings:**
+- Progress bar display
+- Animation transitions
+- Default sort mode
+- Priority mode toggle
+
+Access via command: "Start TikTok Review Session"
 
 ### Template Variables
 
@@ -51,17 +86,26 @@ The plugin supports the following template variables:
 
 ## Installation
 
-### From Community Plugins (Recommended)
+This plugin is currently under review for the Obsidian Community Plugins directory.
+
+### Using BRAT (Recommended)
+1. Install the BRAT plugin from Community Plugins
+2. Open BRAT settings
+3. Click "Add Beta plugin"
+4. Enter: `ameyxd/obsidian-tiktoker`
+5. Enable the plugin in Community Plugins settings
+
+### Manual Installation
+1. Download the latest release files (`main.js`, `manifest.json`, `styles.css`) from the [releases page](https://github.com/ameyxd/obsidian-tiktoker/releases)
+2. Create a folder `obsidian-tiktoker` in your vault's `.obsidian/plugins/` directory
+3. Copy the downloaded files into this folder
+4. Reload Obsidian and enable the plugin in settings
+
+### From Community Plugins (When Approved)
 1. Open Obsidian Settings
 2. Go to Community Plugins
 3. Browse and search for "TikToker"
 4. Click Install and Enable
-
-### Manual Installation
-1. Download the latest release files (`main.js`, `manifest.json`, `styles.css`)
-2. Create a folder `obsidian-tiktoker` in your vault's `.obsidian/plugins/` directory
-3. Copy the downloaded files into this folder
-4. Reload Obsidian and enable the plugin in settings
 
 ## Configuration
 
@@ -79,12 +123,11 @@ Access plugin settings through Settings → Community Plugins → TikToker:
 
 ### Coming in Future Versions
 
-- **Audio Transcription**: Automatic speech-to-text transcription of TikTok audio
-- **Batch Processing**: Process multiple TikTok URLs at once
 - **Advanced Templates**: More customization options for note formatting
 - **Thumbnail Extraction**: Save video thumbnails as attachments
 - **Offline Mode**: Cache video metadata for offline access
 - **Integration Features**: Connect with other Obsidian plugins (Calendar, Tags, etc.)
+- **Keyboard Shortcuts**: Hotkeys for quick review queue navigation
 
 ## Support
 

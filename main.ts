@@ -1,4 +1,6 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer } from 'obsidian';
+
+const VIEW_TYPE_TIKTOK_REVIEW = 'tiktok-review-view';
 
 interface TikTokerSettings {
 	outputFolder: string;
@@ -28,6 +30,11 @@ interface TikTokerSettings {
 	enableTranscription: boolean;
 	openNoteOnCreation: boolean;
 	debugMode: boolean;
+	// Review Queue Settings
+	reviewQueueShowProgressBar: boolean;
+	reviewQueueEnableTransitions: boolean;
+	reviewQueueDefaultSort: 'created-desc' | 'created-asc' | 'author' | 'hashtags';
+	reviewQueuePriorityMode: boolean;
 }
 
 const DEFAULT_SETTINGS: TikTokerSettings = {
@@ -57,7 +64,12 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	showBulkProcessingProgress: true,
 	enableTranscription: false,
 	openNoteOnCreation: true,
-	debugMode: false
+	debugMode: false,
+	// Review Queue Settings
+	reviewQueueShowProgressBar: true,
+	reviewQueueEnableTransitions: true,
+	reviewQueueDefaultSort: 'created-desc',
+	reviewQueuePriorityMode: false
 }
 
 export default class TikTokerPlugin extends Plugin {
@@ -72,6 +84,12 @@ export default class TikTokerPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+
+		// Register the TikTok Review view
+		this.registerView(
+			VIEW_TYPE_TIKTOK_REVIEW,
+			(leaf) => new TikTokReviewView(leaf, this)
+		);
 
 		this.addRibbonIcon('video', 'Read TikTok from clipboard', () => {
 			this.processTikTokFromClipboard();
@@ -101,7 +119,41 @@ export default class TikTokerPlugin extends Plugin {
 			}
 		});
 
+		this.addCommand({
+			id: 'start-tiktok-review',
+			name: 'Start TikTok Review Session',
+			callback: () => {
+				this.activateReviewView();
+			}
+		});
+
 		this.addSettingTab(new TikTokerSettingTab(this.app, this));
+	}
+
+	async activateReviewView() {
+		const { workspace } = this.app;
+
+		let leaf: WorkspaceLeaf | null = null;
+		const leaves = workspace.getLeavesOfType(VIEW_TYPE_TIKTOK_REVIEW);
+
+		if (leaves.length > 0) {
+			// If view already exists, reveal it
+			leaf = leaves[0];
+		} else {
+			// Create new leaf in right sidebar
+			const rightLeaf = workspace.getRightLeaf(false);
+			if (rightLeaf) {
+				await rightLeaf.setViewState({
+					type: VIEW_TYPE_TIKTOK_REVIEW,
+					active: true,
+				});
+				leaf = rightLeaf;
+			}
+		}
+
+		if (leaf) {
+			workspace.revealLeaf(leaf);
+		}
 	}
 
 	async processTikTokFromClipboard() {
@@ -1386,13 +1438,13 @@ export default class TikTokerPlugin extends Plugin {
 			// Add source property
 			content += `source: "#tiktoker"\n`;
 			
-			// Add tags with tiktoker and unreviewed always included
+			// Add tags with tiktoker and unreviewed_tiktok always included
 			if (this.settings.includeTagsFromHashtags && data.hashtags) {
 				const hashtagTags = data.hashtags.map((tag: string) => tag.replace('#', ''));
-				const allTags = ['tiktoker', 'unreviewed', ...hashtagTags];
+				const allTags = ['tiktoker', 'unreviewed_tiktok', ...hashtagTags];
 				content += `tags: [${allTags.join(', ')}]\n`;
 			} else {
-				content += `tags: [tiktoker, unreviewed]\n`;
+				content += `tags: [tiktoker, unreviewed_tiktok]\n`;
 			}
 			content += '---\n\n';
 		}
@@ -2251,6 +2303,53 @@ class TikTokerSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.debugMode)
 				.onChange(async (value) => {
 					this.plugin.settings.debugMode = value;
+					await this.plugin.saveSettings();
+				}));
+
+		// Review Queue Settings Section
+		containerEl.createEl('h3', {text: 'Review Queue Settings'});
+
+		new Setting(containerEl)
+			.setName('Show Progress Bar')
+			.setDesc('Display a visual progress bar showing your position in the queue')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.reviewQueueShowProgressBar)
+				.onChange(async (value) => {
+					this.plugin.settings.reviewQueueShowProgressBar = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Enable Transitions')
+			.setDesc('Add smooth animations when changing tags and states')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.reviewQueueEnableTransitions)
+				.onChange(async (value) => {
+					this.plugin.settings.reviewQueueEnableTransitions = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Default Sort Mode')
+			.setDesc('Default sorting method when opening the review queue')
+			.addDropdown(dropdown => dropdown
+				.addOption('created-desc', 'Newest First')
+				.addOption('created-asc', 'Oldest First')
+				.addOption('author', 'By Author')
+				.addOption('hashtags', 'By Hashtags')
+				.setValue(this.plugin.settings.reviewQueueDefaultSort)
+				.onChange(async (value: any) => {
+					this.plugin.settings.reviewQueueDefaultSort = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Priority Mode')
+			.setDesc('Always show starred items first, regardless of sort order')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.reviewQueuePriorityMode)
+				.onChange(async (value) => {
+					this.plugin.settings.reviewQueuePriorityMode = value;
 					await this.plugin.saveSettings();
 				}));
 	}
@@ -3251,5 +3350,993 @@ class SingleTranscriptionToast {
 				}, 300);
 			}
 		}, delay);
+	}
+}
+
+class TikTokReviewView extends ItemView {
+	plugin: TikTokerPlugin;
+	queue: TFile[] = [];
+	currentIndex: number = 0;
+	filterMode: 'unwatched' | 'review_again' | 'watched' = 'unwatched';
+	// Combined filters
+	filterStarred: boolean = false;
+	filterUnwatched: boolean = true;
+	filterWatched: boolean = false;
+	filterReviewAgain: boolean = false;
+
+	sortMode: 'created-asc' | 'created-desc' | 'author' | 'hashtags' = 'created-desc';
+	showNoteContent: boolean = false;
+	editableContent: boolean = false;
+
+	// Undo state
+	undoState: {
+		file: TFile;
+		content: string;
+	} | null = null;
+
+	containerDiv: HTMLElement;
+	embedDiv: HTMLElement;
+	metadataDiv: HTMLElement;
+	hashtagsDiv: HTMLElement;
+	noteContentDiv: HTMLElement;
+	navControlsDiv: HTMLElement;
+	statusControlsDiv: HTMLElement;
+	undoButtonDiv: HTMLElement;
+	queueCounterDiv: HTMLElement;
+	progressBarDiv: HTMLElement;
+	quickNotesDiv: HTMLElement;
+	undoButton: HTMLButtonElement;
+	watchedButton: HTMLButtonElement;
+	starButton: HTMLButtonElement;
+	quickNotesTextarea: HTMLTextAreaElement;
+	addNoteButton: HTMLButtonElement;
+
+	constructor(leaf: WorkspaceLeaf, plugin: TikTokerPlugin) {
+		super(leaf);
+		this.plugin = plugin;
+	}
+
+	getViewType(): string {
+		return VIEW_TYPE_TIKTOK_REVIEW;
+	}
+
+	getDisplayText(): string {
+		return 'TikTok Review';
+	}
+
+	getIcon(): string {
+		return 'video';
+	}
+
+	async onOpen() {
+		const container = this.containerEl.children[1];
+		container.empty();
+		container.addClass('tiktok-review-container');
+
+		// Add CSS styles
+		this.addStyles();
+
+		// Create main container
+		this.containerDiv = container.createDiv({ cls: 'tiktok-review-content' });
+
+		// Header
+		const header = this.containerDiv.createEl('h4', {
+			text: 'TikTok Review Queue',
+			cls: 'tiktok-review-header'
+		});
+
+		// Progress bar (if enabled)
+		if (this.plugin.settings.reviewQueueShowProgressBar) {
+			this.progressBarDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-progress-bar' });
+			const progressFill = this.progressBarDiv.createDiv({ cls: 'tiktok-review-progress-fill' });
+		}
+
+		// Combined Filter checkboxes and Sort controls
+		const filterDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-filter' });
+
+		const filterLabel = filterDiv.createEl('span', { text: 'Show: ', cls: 'tiktok-review-filter-label' });
+
+		const filtersContainer = filterDiv.createDiv({ cls: 'tiktok-review-filter-checkboxes' });
+
+		this.createFilterCheckbox(filtersContainer, 'Unwatched', this.filterUnwatched, async (val) => {
+			this.filterUnwatched = val;
+			await this.loadQueue();
+			await this.renderCurrentTikTok();
+		});
+
+		this.createFilterCheckbox(filtersContainer, 'Watched', this.filterWatched, async (val) => {
+			this.filterWatched = val;
+			await this.loadQueue();
+			await this.renderCurrentTikTok();
+		});
+
+		this.createFilterCheckbox(filtersContainer, 'Review', this.filterReviewAgain, async (val) => {
+			this.filterReviewAgain = val;
+			await this.loadQueue();
+			await this.renderCurrentTikTok();
+		});
+
+		this.createFilterCheckbox(filtersContainer, 'Starred', this.filterStarred, async (val) => {
+			this.filterStarred = val;
+			await this.loadQueue();
+			await this.renderCurrentTikTok();
+		});
+
+		// Sort dropdown with new options
+		const sortLabel = filterDiv.createEl('span', { text: 'Sort: ', cls: 'tiktok-review-sort-label' });
+		const sortToggle = filterDiv.createEl('select', { cls: 'dropdown' });
+		sortToggle.createEl('option', { text: 'Newest First', value: 'created-desc' });
+		sortToggle.createEl('option', { text: 'Oldest First', value: 'created-asc' });
+		sortToggle.createEl('option', { text: 'By Author', value: 'author' });
+		sortToggle.createEl('option', { text: 'By Hashtags', value: 'hashtags' });
+		sortToggle.value = this.plugin.settings.reviewQueueDefaultSort;
+		this.sortMode = this.plugin.settings.reviewQueueDefaultSort;
+		sortToggle.addEventListener('change', async () => {
+			this.sortMode = sortToggle.value as any;
+			await this.loadQueue();
+			await this.renderCurrentTikTok();
+		});
+
+		// Metadata (title, author, date) - BEFORE embed
+		this.metadataDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-metadata' });
+
+		// Embed container - AFTER metadata
+		this.embedDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-embed' });
+
+		// Hashtags section
+		this.hashtagsDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-hashtags' });
+
+		// Note content toggle, edit toggle, and open button container
+		const noteButtonsDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-note-buttons' });
+		const toggleButton = noteButtonsDiv.createEl('button', {
+			text: '▼ Show Note Content',
+			cls: 'mod-cta'
+		});
+		toggleButton.addEventListener('click', () => {
+			this.showNoteContent = !this.showNoteContent;
+			toggleButton.setText(this.showNoteContent ? '▲ Hide Note Content' : '▼ Show Note Content');
+			this.renderNoteContent();
+		});
+
+		const editToggleButton = noteButtonsDiv.createEl('button', {
+			text: 'Edit',
+			cls: 'tiktok-review-edit-toggle'
+		});
+		editToggleButton.addEventListener('click', () => {
+			this.editableContent = !this.editableContent;
+			editToggleButton.setText(this.editableContent ? 'View' : 'Edit');
+			this.renderNoteContent();
+		});
+
+		const openTabButton = noteButtonsDiv.createEl('button', {
+			text: '↗',
+			cls: 'tiktok-review-open-tab'
+		});
+		openTabButton.addEventListener('click', () => {
+			this.openCurrentInTab();
+		});
+
+		// Note content (collapsible)
+		this.noteContentDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-note-content' });
+		this.noteContentDiv.style.display = 'none';
+
+		// Quick Notes section
+		this.quickNotesDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-quick-notes' });
+		this.quickNotesDiv.createEl('label', { text: 'Quick Note:', cls: 'tiktok-review-quick-notes-label' });
+		this.quickNotesTextarea = this.quickNotesDiv.createEl('textarea', {
+			cls: 'tiktok-review-quick-notes-textarea',
+			attr: { placeholder: 'Add a note about this TikTok...' }
+		});
+		this.addNoteButton = this.quickNotesDiv.createEl('button', {
+			text: 'Add Note',
+			cls: 'mod-cta'
+		});
+		this.addNoteButton.addEventListener('click', () => this.addQuickNote());
+
+		// Queue counter
+		this.queueCounterDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-counter' });
+
+		// Navigation controls section
+		const navLabel = this.containerDiv.createEl('div', { text: 'Navigation:', cls: 'tiktok-review-section-label' });
+		this.navControlsDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-nav-controls' });
+
+		// Status controls section
+		const statusLabel = this.containerDiv.createEl('div', { text: 'Status:', cls: 'tiktok-review-section-label' });
+		this.statusControlsDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-status-controls' });
+
+		// Undo button
+		this.undoButtonDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-undo-container' });
+
+		this.createControls();
+
+		// Load and render first TikTok
+		await this.loadQueue();
+		await this.renderCurrentTikTok();
+	}
+
+	addStyles() {
+		// Add inline styles for the review view
+		const style = document.createElement('style');
+		style.textContent = `
+			.tiktok-review-container {
+				padding: 0;
+				height: 100%;
+				overflow: auto;
+			}
+			.tiktok-review-content {
+				padding: 16px;
+			}
+			.tiktok-review-header {
+				margin: 0 0 12px 0;
+				text-align: center;
+			}
+			.tiktok-review-progress-bar {
+				width: 100%;
+				height: 4px;
+				background: var(--background-modifier-border);
+				border-radius: 2px;
+				margin-bottom: 12px;
+				overflow: hidden;
+			}
+			.tiktok-review-progress-fill {
+				height: 100%;
+				background: var(--interactive-accent);
+				transition: width 0.3s ease;
+			}
+			.tiktok-review-filter {
+				margin-bottom: 12px;
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				flex-wrap: wrap;
+			}
+			.tiktok-review-filter-label {
+				font-weight: 600;
+				font-size: 0.9em;
+			}
+			.tiktok-review-filter-checkboxes {
+				display: flex;
+				gap: 12px;
+				flex-wrap: wrap;
+			}
+			.tiktok-review-filter-checkbox {
+				display: flex;
+				align-items: center;
+				gap: 4px;
+			}
+			.tiktok-review-filter-checkbox input[type="checkbox"] {
+				cursor: pointer;
+			}
+			.tiktok-review-filter-checkbox label {
+				cursor: pointer;
+				font-size: 0.9em;
+			}
+			.tiktok-review-sort-label {
+				margin-left: 8px;
+			}
+			.tiktok-review-embed {
+				width: 100%;
+				min-width: 325px;
+				min-height: 400px;
+				margin: 0 auto 12px auto;
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 4px;
+				overflow: hidden;
+				position: relative;
+				resize: both;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+			}
+			.tiktok-review-embed iframe {
+				width: 100%;
+				height: 100%;
+				min-height: 400px;
+				border: none;
+			}
+			.tiktok-review-metadata {
+				padding: 8px;
+				margin-bottom: 12px;
+				background: var(--background-secondary);
+				border-radius: 4px;
+				font-size: 0.9em;
+			}
+			.tiktok-review-hashtags {
+				padding: 8px;
+				margin-bottom: 12px;
+				background: var(--background-secondary);
+				border-radius: 4px;
+				display: flex;
+				flex-wrap: wrap;
+				gap: 6px;
+			}
+			.tiktok-review-hashtag {
+				display: inline-block;
+				padding: 4px 8px;
+				background: var(--interactive-accent);
+				color: var(--text-on-accent);
+				border-radius: 12px;
+				font-size: 0.85em;
+				font-weight: 500;
+				cursor: pointer;
+				transition: opacity 0.2s;
+			}
+			.tiktok-review-hashtag:hover {
+				opacity: 0.8;
+			}
+			.tiktok-review-note-buttons {
+				display: flex;
+				gap: 8px;
+				margin-bottom: 12px;
+			}
+			.tiktok-review-note-buttons button:first-child {
+				flex: 1;
+			}
+			.tiktok-review-open-tab {
+				width: 60px;
+				text-align: center;
+				font-size: 1.1em;
+			}
+			.tiktok-review-note-content {
+				padding: 12px;
+				margin-bottom: 12px;
+				background: var(--background-secondary);
+				border-radius: 4px;
+				max-height: 300px;
+				overflow-y: auto;
+				font-size: 0.85em;
+			}
+			.tiktok-review-counter {
+				text-align: center;
+				margin-bottom: 12px;
+				font-weight: 600;
+			}
+			.tiktok-review-section-label {
+				font-size: 0.9em;
+				font-weight: 600;
+				margin-bottom: 8px;
+				margin-top: 12px;
+				color: var(--text-muted);
+			}
+			.tiktok-review-nav-controls {
+				display: flex;
+				gap: 8px;
+				margin-bottom: 12px;
+			}
+			.tiktok-review-nav-controls button {
+				flex: 1;
+				padding: 8px;
+			}
+			.tiktok-review-status-controls {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 8px;
+				margin-bottom: 12px;
+			}
+			.tiktok-review-status-controls button {
+				padding: 8px;
+			}
+			.tiktok-review-status-controls button.is-active {
+				background: var(--interactive-accent);
+				color: var(--text-on-accent);
+			}
+			.tiktok-review-status-controls button.with-transition {
+				transition: background-color 0.3s ease, color 0.3s ease;
+			}
+			.tiktok-review-edit-toggle {
+				min-width: 60px;
+			}
+			.tiktok-review-quick-notes {
+				margin-bottom: 12px;
+				padding: 12px;
+				background: var(--background-secondary);
+				border-radius: 4px;
+			}
+			.tiktok-review-quick-notes-label {
+				display: block;
+				font-weight: 600;
+				font-size: 0.9em;
+				margin-bottom: 8px;
+			}
+			.tiktok-review-quick-notes-textarea {
+				width: 100%;
+				min-height: 80px;
+				padding: 8px;
+				margin-bottom: 8px;
+				background: var(--background-primary);
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 4px;
+				font-family: var(--font-monospace);
+				font-size: 0.9em;
+				resize: vertical;
+			}
+			.tiktok-review-content-editor {
+				width: 100%;
+				min-height: 200px;
+				padding: 8px;
+				margin-bottom: 8px;
+				background: var(--background-primary);
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 4px;
+				font-family: var(--font-monospace);
+				font-size: 0.9em;
+				resize: vertical;
+			}
+			.tiktok-review-save-button {
+				width: 100%;
+			}
+			.tiktok-review-undo-container {
+				margin-top: 8px;
+			}
+			.tiktok-review-undo-container button {
+				width: 100%;
+				padding: 6px;
+				font-size: 0.9em;
+			}
+			.tiktok-review-empty {
+				text-align: center;
+				padding: 40px 20px;
+				color: var(--text-muted);
+			}
+		`;
+		document.head.appendChild(style);
+	}
+
+	createControls() {
+		// Navigation buttons (together)
+		const prevButton = this.navControlsDiv.createEl('button', { text: '⬅ Prev' });
+		prevButton.addEventListener('click', () => this.navigatePrev());
+
+		const nextButton = this.navControlsDiv.createEl('button', { text: 'Next ➡' });
+		nextButton.addEventListener('click', () => this.navigateNext());
+
+		// Status buttons (toggleable)
+		this.watchedButton = this.statusControlsDiv.createEl('button', { text: '✓ Watched' });
+		this.watchedButton.addEventListener('click', () => this.toggleWatched());
+
+		this.starButton = this.statusControlsDiv.createEl('button', { text: '⭐ Star' });
+		this.starButton.addEventListener('click', () => this.toggleStar());
+
+		const reviewAgainButton = this.statusControlsDiv.createEl('button', { text: '🔄 Again' });
+		reviewAgainButton.addEventListener('click', () => this.markAsReviewAgain());
+
+		const skipButton = this.statusControlsDiv.createEl('button', { text: '⏭ Skip' });
+		skipButton.addEventListener('click', () => this.markAsSkip());
+
+		// Undo button (subtle, at bottom)
+		this.undoButton = this.undoButtonDiv.createEl('button', { text: '↶ Undo' });
+		this.undoButton.disabled = true;
+		this.undoButton.addEventListener('click', () => this.undoLastAction());
+	}
+
+	createFilterCheckbox(container: HTMLElement, label: string, checked: boolean, onChange: (val: boolean) => void): HTMLElement {
+		const checkboxContainer = container.createDiv({ cls: 'tiktok-review-filter-checkbox' });
+		const checkbox = checkboxContainer.createEl('input', { type: 'checkbox' });
+		checkbox.checked = checked;
+		checkbox.addEventListener('change', () => onChange(checkbox.checked));
+		checkboxContainer.createEl('label', { text: label });
+		return checkboxContainer;
+	}
+
+	updateProgressBar() {
+		if (!this.plugin.settings.reviewQueueShowProgressBar || !this.progressBarDiv) return;
+
+		const percentage = this.queue.length > 0 ? ((this.currentIndex + 1) / this.queue.length) * 100 : 0;
+		const progressFill = this.progressBarDiv.querySelector('.tiktok-review-progress-fill') as HTMLElement;
+		if (progressFill) {
+			progressFill.style.width = `${percentage}%`;
+		}
+	}
+
+	updateQueueCounter() {
+		if (this.queue.length === 0) {
+			this.queueCounterDiv.setText('Queue: 0');
+		} else {
+			this.queueCounterDiv.setText(`Queue: ${this.currentIndex + 1}/${this.queue.length}`);
+		}
+		this.updateProgressBar();
+	}
+
+	async updateButtonStates() {
+		if (this.queue.length === 0) return;
+
+		const currentFile = this.queue[this.currentIndex];
+		const cache = this.app.metadataCache.getFileCache(currentFile);
+		const tags = cache?.frontmatter?.tags || [];
+		const tagArray = Array.isArray(tags) ? tags : [tags];
+
+		const isWatched = tagArray.some((t: string) => t === 'watched' || t === '#watched');
+		const isStarred = tagArray.some((t: string) => t === 'star' || t === '#star');
+
+		const transitionClass = this.plugin.settings.reviewQueueEnableTransitions ? 'with-transition' : '';
+
+		// Update watched button
+		this.watchedButton.removeClass('is-active');
+		if (isWatched) {
+			this.watchedButton.addClass('is-active');
+			this.watchedButton.setText('✓ Watched');
+		} else {
+			this.watchedButton.setText('Watched');
+		}
+		if (transitionClass) this.watchedButton.addClass(transitionClass);
+
+		// Update star button
+		this.starButton.removeClass('is-active');
+		if (isStarred) {
+			this.starButton.addClass('is-active');
+			this.starButton.setText('⭐ Starred');
+		} else {
+			this.starButton.setText('⭐ Star');
+		}
+		if (transitionClass) this.starButton.addClass(transitionClass);
+
+		this.updateQueueCounter();
+	}
+
+	async loadQueue() {
+		const tiktokFolder = this.plugin.settings.outputFolder || 'TikToks';
+
+		// Get all files in the TikTok folder
+		const allFiles = this.app.vault.getMarkdownFiles()
+			.filter(file => file.path.startsWith(tiktokFolder + '/'));
+
+		// Combined filter logic (OR between status filters)
+		this.queue = [];
+		for (const file of allFiles) {
+			const cache = this.app.metadataCache.getFileCache(file);
+			const tags = cache?.frontmatter?.tags || [];
+			const tagArray = Array.isArray(tags) ? tags : [tags];
+
+			const hasWatched = tagArray.some((t: string) => t === 'watched' || t === '#watched');
+			const hasSkip = tagArray.some((t: string) => t === 'skip' || t === '#skip');
+			const hasReviewAgain = tagArray.some((t: string) => t === 'review_again' || t === '#review_again');
+			const hasStarred = tagArray.some((t: string) => t === 'star' || t === '#star');
+
+			// Skip files with 'skip' tag
+			if (hasSkip) continue;
+
+			// OR logic for status filters (at least one must be checked and match)
+			let matchesStatus = false;
+			if (this.filterUnwatched && !hasWatched) matchesStatus = true;
+			if (this.filterWatched && hasWatched) matchesStatus = true;
+			if (this.filterReviewAgain && hasReviewAgain) matchesStatus = true;
+
+			// If no status filters are checked, show nothing
+			if (!this.filterUnwatched && !this.filterWatched && !this.filterReviewAgain) {
+				matchesStatus = false;
+			}
+
+			// AND logic for starred filter
+			if (this.filterStarred && !hasStarred) {
+				matchesStatus = false;
+			}
+
+			if (matchesStatus) {
+				this.queue.push(file);
+			}
+		}
+
+		// Sort queue based on sortMode
+		if (this.sortMode === 'created-desc') {
+			this.queue.sort((a, b) => {
+				const aCache = this.app.metadataCache.getFileCache(a);
+				const bCache = this.app.metadataCache.getFileCache(b);
+				const aDate = aCache?.frontmatter?.created || '';
+				const bDate = bCache?.frontmatter?.created || '';
+				return bDate.localeCompare(aDate);
+			});
+		} else if (this.sortMode === 'created-asc') {
+			this.queue.sort((a, b) => {
+				const aCache = this.app.metadataCache.getFileCache(a);
+				const bCache = this.app.metadataCache.getFileCache(b);
+				const aDate = aCache?.frontmatter?.created || '';
+				const bDate = bCache?.frontmatter?.created || '';
+				return aDate.localeCompare(bDate);
+			});
+		} else if (this.sortMode === 'author') {
+			this.queue.sort((a, b) => {
+				const aCache = this.app.metadataCache.getFileCache(a);
+				const bCache = this.app.metadataCache.getFileCache(b);
+				const aAuthor = aCache?.frontmatter?.author || '';
+				const bAuthor = bCache?.frontmatter?.author || '';
+				return aAuthor.localeCompare(bAuthor);
+			});
+		} else if (this.sortMode === 'hashtags') {
+			this.queue.sort((a, b) => {
+				const aCache = this.app.metadataCache.getFileCache(a);
+				const bCache = this.app.metadataCache.getFileCache(b);
+				const aTags = aCache?.frontmatter?.tags || [];
+				const bTags = bCache?.frontmatter?.tags || [];
+				const aTagArray = Array.isArray(aTags) ? aTags : [aTags];
+				const bTagArray = Array.isArray(bTags) ? bTags : [bTags];
+				// Sort by first content hashtag (excluding system tags)
+				const systemTags = ['tiktoker', 'unreviewed_tiktok', 'watched', 'star', 'review_again', 'skip'];
+				const aHashtag = aTagArray.find((t: string) => !systemTags.includes(t.replace('#', ''))) || '';
+				const bHashtag = bTagArray.find((t: string) => !systemTags.includes(t.replace('#', ''))) || '';
+				return aHashtag.localeCompare(bHashtag);
+			});
+		}
+
+		// Priority mode: starred items come first
+		if (this.plugin.settings.reviewQueuePriorityMode) {
+			this.queue.sort((a, b) => {
+				const aCache = this.app.metadataCache.getFileCache(a);
+				const bCache = this.app.metadataCache.getFileCache(b);
+				const aTags = aCache?.frontmatter?.tags || [];
+				const bTags = bCache?.frontmatter?.tags || [];
+				const aTagArray = Array.isArray(aTags) ? aTags : [aTags];
+				const bTagArray = Array.isArray(bTags) ? bTags : [bTags];
+				const aStarred = aTagArray.some((t: string) => t === 'star' || t === '#star');
+				const bStarred = bTagArray.some((t: string) => t === 'star' || t === '#star');
+
+				if (aStarred && !bStarred) return -1;
+				if (!aStarred && bStarred) return 1;
+				return 0;
+			});
+		}
+
+		// Reset index if queue changed
+		if (this.currentIndex >= this.queue.length) {
+			this.currentIndex = 0;
+		}
+	}
+
+	async renderCurrentTikTok() {
+		if (this.queue.length === 0) {
+			this.embedDiv.empty();
+			this.embedDiv.createDiv({
+				cls: 'tiktok-review-empty',
+				text: 'No TikToks match the current filters.'
+			});
+			this.metadataDiv.empty();
+			this.noteContentDiv.empty();
+			this.updateQueueCounter();
+			return;
+		}
+
+		const currentFile = this.queue[this.currentIndex];
+		const content = await this.app.vault.read(currentFile);
+
+		// Extract iframe from content - support both iframe and blockquote formats
+		let iframeMatch = content.match(/<iframe[^>]*src="https:\/\/www\.tiktok\.com\/embed\/v2\/[^"]*"[^>]*><\/iframe>/);
+
+		// Fallback to blockquote format
+		if (!iframeMatch) {
+			iframeMatch = content.match(/<blockquote[^>]*class="tiktok-embed"[^>]*>[\s\S]*?<\/blockquote>\s*<script[^>]*src="https:\/\/www\.tiktok\.com\/embed\.js"[^>]*><\/script>/);
+		}
+
+		this.embedDiv.empty();
+		if (iframeMatch) {
+			this.embedDiv.innerHTML = iframeMatch[0];
+			// For iframe embeds, no script needed
+			// For blockquote embeds, reload TikTok embed script
+			if (iframeMatch[0].includes('blockquote')) {
+				const script = document.createElement('script');
+				script.src = 'https://www.tiktok.com/embed.js';
+				script.async = true;
+				this.embedDiv.appendChild(script);
+			}
+		} else {
+			this.embedDiv.createDiv({ text: 'TikTok embed not found in note' });
+		}
+
+		// Show metadata - just title
+		const cache = this.app.metadataCache.getFileCache(currentFile);
+		this.metadataDiv.empty();
+		this.metadataDiv.createEl('div', {
+			text: currentFile.basename,
+			cls: 'tiktok-review-title'
+		});
+
+		// Show hashtags
+		this.hashtagsDiv.empty();
+		if (cache?.frontmatter?.tags) {
+			const tags = Array.isArray(cache.frontmatter.tags) ? cache.frontmatter.tags : [cache.frontmatter.tags];
+			// Filter to show only content hashtags (not system tags like tiktoker, unreviewed_tiktok, watched, etc.)
+			const systemTags = ['tiktoker', 'unreviewed_tiktok', 'watched', 'star', 'review_again', 'skip'];
+			const contentHashtags = tags.filter((tag: string) => {
+				const cleanTag = tag.replace('#', '');
+				return !systemTags.includes(cleanTag);
+			});
+
+			if (contentHashtags.length > 0) {
+				contentHashtags.forEach((tag: string) => {
+					const cleanTag = tag.replace('#', '');
+					const hashtagEl = this.hashtagsDiv.createEl('span', {
+						text: `#${cleanTag}`,
+						cls: 'tiktok-review-hashtag'
+					});
+					hashtagEl.addEventListener('click', () => {
+						// Open tag search in left sidebar
+						(this.app as any).internalPlugins.plugins['global-search'].instance.openGlobalSearch(`tag:#${cleanTag}`);
+					});
+				});
+			}
+		}
+
+		// Update button states and counter
+		await this.updateButtonStates();
+
+		// Update note content if visible
+		if (this.showNoteContent) {
+			this.renderNoteContent();
+		}
+	}
+
+	async renderNoteContent() {
+		this.noteContentDiv.empty();
+
+		if (!this.showNoteContent) {
+			this.noteContentDiv.style.display = 'none';
+			return;
+		}
+
+		this.noteContentDiv.style.display = 'block';
+
+		if (this.queue.length === 0) return;
+
+		const currentFile = this.queue[this.currentIndex];
+		const content = await this.app.vault.read(currentFile);
+
+		// Extract Description and Transcription sections
+		let displayContent = content.replace(/^---[\s\S]*?---\n/, '');
+		displayContent = displayContent.replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/, '');
+		displayContent = displayContent.replace(/<blockquote[^>]*class="tiktok-embed"[\s\S]*?<\/script>/, '');
+
+		// Extract just Description and Transcription sections if they exist
+		const descMatch = displayContent.match(/## Description\s*([\s\S]*?)(?=##|$)/);
+		const transMatch = displayContent.match(/## Transcription\s*([\s\S]*?)(?=##|$)/);
+
+		let focusedContent = '';
+		if (descMatch) focusedContent += '## Description\n' + descMatch[1].trim() + '\n\n';
+		if (transMatch) focusedContent += '## Transcription\n' + transMatch[1].trim();
+
+		const contentToRender = focusedContent.trim() || displayContent.trim();
+
+		if (this.editableContent) {
+			// Show editable textarea
+			const textarea = this.noteContentDiv.createEl('textarea', {
+				cls: 'tiktok-review-content-editor',
+				value: contentToRender
+			});
+
+			const saveButton = this.noteContentDiv.createEl('button', {
+				text: 'Save Changes',
+				cls: 'mod-cta tiktok-review-save-button'
+			});
+
+			saveButton.addEventListener('click', async () => {
+				const newContent = textarea.value;
+				// Replace the Description and Transcription sections in the original content
+				let updatedContent = content;
+
+				if (descMatch && newContent.includes('## Description')) {
+					const newDescMatch = newContent.match(/## Description\s*([\s\S]*?)(?=##|$)/);
+					if (newDescMatch) {
+						updatedContent = updatedContent.replace(
+							/## Description[\s\S]*?(?=##|$)/,
+							`## Description\n${newDescMatch[1].trim()}\n\n`
+						);
+					}
+				}
+
+				if (transMatch && newContent.includes('## Transcription')) {
+					const newTransMatch = newContent.match(/## Transcription\s*([\s\S]*?)(?=##|$)/);
+					if (newTransMatch) {
+						updatedContent = updatedContent.replace(
+							/## Transcription[\s\S]*?(?=##|$)/,
+							`## Transcription\n${newTransMatch[1].trim()}`
+						);
+					}
+				}
+
+				await this.app.vault.modify(currentFile, updatedContent);
+				new Notice('Content saved');
+			});
+		} else {
+			// Show rendered markdown
+			const contentDiv = this.noteContentDiv.createEl('div', { cls: 'tiktok-review-editable-content' });
+			await MarkdownRenderer.renderMarkdown(contentToRender, contentDiv, currentFile.path, this);
+		}
+	}
+
+	async openCurrentInTab() {
+		if (this.queue.length === 0) return;
+
+		const currentFile = this.queue[this.currentIndex];
+		const leaf = this.app.workspace.getLeaf('tab');
+		await leaf.openFile(currentFile);
+	}
+
+	navigatePrev() {
+		if (this.queue.length === 0) return;
+		this.currentIndex = (this.currentIndex - 1 + this.queue.length) % this.queue.length;
+		this.clearUndoState(); // Clear when moving to different file
+		this.renderCurrentTikTok();
+	}
+
+	navigateNext() {
+		if (this.queue.length === 0) return;
+		this.currentIndex = (this.currentIndex + 1) % this.queue.length;
+		this.clearUndoState(); // Clear when moving to different file
+		this.renderCurrentTikTok();
+	}
+
+	async toggleWatched() {
+		if (this.queue.length === 0) return;
+
+		const currentFile = this.queue[this.currentIndex];
+		const cache = this.app.metadataCache.getFileCache(currentFile);
+		const tags = cache?.frontmatter?.tags || [];
+		const tagArray = Array.isArray(tags) ? tags : [tags];
+		const isWatched = tagArray.some((t: string) => t === 'watched' || t === '#watched');
+
+		if (isWatched) {
+			// Unwatch: remove watched, add unreviewed_tiktok
+			await this.updateTags(['unreviewed_tiktok'], ['watched'], false);
+			new Notice('Marked as unwatched');
+		} else {
+			// Watch: add watched, remove unreviewed_tiktok and review_again
+			await this.updateTags(['watched'], ['unreviewed_tiktok', 'review_again'], true);
+			new Notice('Marked as watched');
+		}
+
+		// Update button state without reloading embed
+		await this.updateButtonStates();
+	}
+
+	async toggleStar() {
+		if (this.queue.length === 0) return;
+
+		const currentFile = this.queue[this.currentIndex];
+		const cache = this.app.metadataCache.getFileCache(currentFile);
+		const tags = cache?.frontmatter?.tags || [];
+		const tagArray = Array.isArray(tags) ? tags : [tags];
+		const isStarred = tagArray.some((t: string) => t === 'star' || t === '#star');
+
+		if (isStarred) {
+			// Unstar
+			await this.updateTags([], ['star'], false);
+			new Notice('Unstarred');
+		} else {
+			// Star
+			await this.updateTags(['star'], [], false);
+			new Notice('Starred');
+		}
+
+		// Update button state without reloading embed
+		await this.updateButtonStates();
+	}
+
+	async markAsReviewAgain() {
+		await this.updateTags(['review_again'], ['unreviewed_tiktok', 'watched'], true);
+		new Notice('Marked for review again');
+		await this.moveToNext();
+	}
+
+	async markAsSkip() {
+		await this.updateTags(['skip'], [], false);
+		new Notice('Skipped');
+		await this.moveToNext();
+	}
+
+	async addQuickNote() {
+		if (this.queue.length === 0) return;
+
+		const noteText = this.quickNotesTextarea.value.trim();
+		if (!noteText) {
+			new Notice('Please enter a note');
+			return;
+		}
+
+		const currentFile = this.queue[this.currentIndex];
+		let content = await this.app.vault.read(currentFile);
+
+		// Check if ## Notes section exists
+		if (content.includes('## Notes')) {
+			// Append to existing Notes section
+			content = content.replace(
+				/(## Notes[\s\S]*?)(?=\n##|$)/,
+				`$1\n- ${noteText}`
+			);
+		} else {
+			// Add new Notes section at the end
+			content += `\n\n## Notes\n- ${noteText}`;
+		}
+
+		await this.app.vault.modify(currentFile, content);
+		this.quickNotesTextarea.value = '';
+		new Notice('Note added');
+	}
+
+	async updateTags(tagsToAdd: string[], tagsToRemove: string[], addReviewedDate: boolean) {
+		if (this.queue.length === 0) return;
+
+		const currentFile = this.queue[this.currentIndex];
+		const originalContent = await this.app.vault.read(currentFile);
+
+		// Save undo state BEFORE making changes
+		this.undoState = {
+			file: currentFile,
+			content: originalContent
+		};
+
+		// Use Obsidian's processFrontMatter API for proper metadata handling
+		await this.app.fileManager.processFrontMatter(currentFile, (frontmatter) => {
+			// Handle tags
+			let tags = frontmatter.tags || [];
+			if (!Array.isArray(tags)) {
+				tags = [tags];
+			}
+
+			// Remove tags (handle both with and without # prefix)
+			tags = tags.filter((t: string) => {
+				const cleanTag = t.replace('#', '');
+				return !tagsToRemove.includes(cleanTag) && !tagsToRemove.includes(t);
+			});
+
+			// Add tags (without # prefix for consistency)
+			tagsToAdd.forEach(tag => {
+				const cleanTag = tag.replace('#', '');
+				if (!tags.includes(cleanTag) && !tags.includes(`#${cleanTag}`)) {
+					tags.push(cleanTag);
+				}
+			});
+
+			frontmatter.tags = tags;
+
+			// Add reviewed_date if requested
+			if (addReviewedDate) {
+				const today = new Date().toISOString().split('T')[0];
+				frontmatter.reviewed_date = today;
+			}
+		});
+
+		// Enable undo button
+		this.undoButton.disabled = false;
+	}
+
+	async moveToNext() {
+		// Reload queue to reflect changes
+		await this.loadQueue();
+
+		// If current index is now beyond queue length, wrap to 0
+		if (this.currentIndex >= this.queue.length) {
+			this.currentIndex = 0;
+		}
+
+		await this.renderCurrentTikTok();
+	}
+
+	async undoLastAction() {
+		if (!this.undoState) {
+			new Notice('No action to undo');
+			return;
+		}
+
+		try {
+			// Restore the original content
+			await this.app.vault.modify(this.undoState.file, this.undoState.content);
+			new Notice('Undone');
+
+			// Reload queue and re-render
+			await this.loadQueue();
+			await this.renderCurrentTikTok();
+
+			// Clear undo state
+			this.clearUndoState();
+		} catch (error) {
+			new Notice('Failed to undo action');
+			console.error('Undo error:', error);
+		}
+	}
+
+	clearUndoState() {
+		this.undoState = null;
+		this.undoButton.disabled = true;
+	}
+
+	async onClose() {
+		// Cleanup
 	}
 }
