@@ -26,6 +26,7 @@ interface TikTokerSettings {
 	bypassModalForSingle: boolean;
 	showBulkProcessingProgress: boolean;
 	enableTranscription: boolean;
+	openNoteOnCreation: boolean;
 	debugMode: boolean;
 }
 
@@ -55,6 +56,7 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	bypassModalForSingle: true,
 	showBulkProcessingProgress: true,
 	enableTranscription: false,
+	openNoteOnCreation: true,
 	debugMode: false
 }
 
@@ -1298,6 +1300,15 @@ export default class TikTokerPlugin extends Plugin {
 				if (!isBulkProcessing) new Notice(`Created: ${noteTitle}`);
 			}
 
+			// Open the note if the setting is enabled and not bulk processing
+			if (this.settings.openNoteOnCreation && !isBulkProcessing) {
+				const file = this.app.vault.getAbstractFileByPath(filePath);
+				if (file) {
+					const leaf = this.app.workspace.getLeaf(false);
+					await leaf.openFile(file as any);
+				}
+			}
+
 			// Start transcription asynchronously if enabled and not a slideshow
 			if (this.settings.transcriptionApi !== 'none' && !data.isSlideshow && !data.isPrivate) {
 				if (!isBulkProcessing) {
@@ -2208,6 +2219,16 @@ class TikTokerSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}));
 		}
+
+		new Setting(containerEl)
+			.setName('Open Note on Creation')
+			.setDesc('Automatically open TikTok notes in the editor when created')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.openNoteOnCreation)
+				.onChange(async (value) => {
+					this.plugin.settings.openNoteOnCreation = value;
+					await this.plugin.saveSettings();
+				}));
 
 		containerEl.createEl('h3', {text: 'Advanced'});
 
