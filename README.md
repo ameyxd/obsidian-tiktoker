@@ -6,7 +6,7 @@ This plugin was built as a personal project to fit my workflow and habits around
 
 ## Features
 
-### Current Version (1.4.0)
+### Current Version (1.5.0)
 
 #### Core Features
 - **Automatic note opening**: Created TikTok notes open immediately on both desktop and mobile (configurable)
@@ -17,7 +17,7 @@ This plugin was built as a personal project to fit my workflow and habits around
 - **Duplicate handling**: Intelligent detection with user prompts
 - **Hashtag integration**: Adds hashtags to content and properties
 - **Flexible templates**: Customize note titles and content layout
-- **Audio transcription**: Speech-to-text with Whisper or AssemblyAI
+- **Local transcription**: Desktop-only speech-to-text using faster-whisper (requires Python, yt-dlp, ffmpeg)
 - **Batch processing**: Handle multiple URLs at once
 
 #### Review Queue System

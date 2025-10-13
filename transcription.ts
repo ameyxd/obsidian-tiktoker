@@ -6,6 +6,11 @@ export interface TranscriptionSettings {
 	whisperModel: 'tiny' | 'base' | 'small' | 'medium' | 'large';
 	whisperBrowser: 'chrome' | 'safari';
 	enableTranscription: boolean;
+	enableManualTranscriptionCommand: boolean;
+	enableTranscriptionOnCreation: boolean;
+	enableBulkTranscription: boolean;
+	addTranscriptionPropertyToFrontmatter: boolean;
+	showTranscriptionCompleteNotification: boolean;
 	urlTimeout: number;
 	debugMode: boolean;
 }
@@ -34,13 +39,23 @@ export class TranscriptionService {
 			return;
 		}
 
+		if (!this.settings.enableManualTranscriptionCommand) {
+			new Notice('Manual transcription command is disabled in settings');
+			return;
+		}
+
 		if (!this.settings.whisperScriptPath) {
 			new Notice('Whisper script path not configured in settings');
 			return;
 		}
 
-		const content = editor.getValue();
+		const file = view.file;
+		if (!file) {
+			new Notice('No active file');
+			return;
+		}
 
+		const content = editor.getValue();
 		const tiktokUrlPattern = /https:\/\/(?:www\.|vm\.)?tiktok\.com\/[^\s\)]+/g;
 		const matches = content.match(tiktokUrlPattern);
 
@@ -49,33 +64,24 @@ export class TranscriptionService {
 			return;
 		}
 
-		new Notice(`Found ${matches.length} TikTok URL(s). Processing first URL...`);
-
 		const url = matches[0];
-		try {
-			new Notice(`Transcribing: ${url}`);
 
-			const transcription = await this.getLocalTranscription(url);
-
-			let updatedContent = content;
-			const urlIndex = updatedContent.indexOf(url);
-			if (urlIndex !== -1) {
-				const beforeUrl = updatedContent.substring(0, urlIndex + url.length);
-				const afterUrl = updatedContent.substring(urlIndex + url.length);
-
-				if (!afterUrl.startsWith('\n\n**Transcription:**')) {
-					updatedContent = beforeUrl + '\n\n**Transcription:** ' + transcription + afterUrl;
-					editor.setValue(updatedContent);
-					new Notice('Transcription added successfully');
-				} else {
-					new Notice('Transcription already exists for this URL');
-				}
-			}
-
-		} catch (error) {
-			console.error('Transcription error:', error);
-			new Notice(`Failed to transcribe: ${error.message}`);
+		// Show progress modal
+		if (this.activeTranscriptionModal) {
+			this.activeTranscriptionModal.close();
 		}
+
+		const fileName = file.basename;
+		const modalData = { author: 'Manual Transcription', url: url };
+		this.activeTranscriptionModal = new SingleTranscriptionModal(this.app, fileName, modalData, this);
+		this.activeTranscriptionModal.open();
+
+		// Start transcription with progress tracking
+		await this.startAsyncTranscription(url, null, file.path, false, (status: string, timeElapsed?: number) => {
+			if (this.activeTranscriptionModal) {
+				this.activeTranscriptionModal.updateTranscriptionStatus(status, timeElapsed);
+			}
+		});
 	}
 
 	private async getLocalTranscription(tiktokUrl: string): Promise<string> {
@@ -84,10 +90,10 @@ export class TranscriptionService {
 		}
 
 		try {
-			const { exec } = await import('child_process');
-			const { promisify } = await import('util');
-			const fs = await import('fs');
-			const path = await import('path');
+			const { exec } = require('child_process');
+			const { promisify } = require('util');
+			const fs = require('fs');
+			const path = require('path');
 
 			const execAsync = promisify(exec);
 
@@ -147,17 +153,16 @@ export class TranscriptionService {
 					for (const line of lines) {
 						const trimmedLine = line.trim();
 
-						if (trimmedLine.startsWith('[TikTok]') ||
-							trimmedLine.startsWith('[info]') ||
-							trimmedLine.startsWith('[download]') ||
-							trimmedLine.startsWith('[ExtractAudio]') ||
-							trimmedLine.startsWith('Extracting cookies') ||
-							trimmedLine.startsWith('Extracted ') ||
-							trimmedLine.startsWith('Deleting original file') ||
-							trimmedLine.startsWith('Saved: ') ||
-							trimmedLine.includes('% of ') ||
+						// Filter out yt-dlp and script output
+						if (trimmedLine.startsWith('[') ||  // All bracketed messages [TikTok], [info], [download], [vm.tiktok], etc.
+							trimmedLine.startsWith('Extracting') ||
+							trimmedLine.startsWith('Extracted') ||
+							trimmedLine.startsWith('Deleting') ||
+							trimmedLine.startsWith('Saved:') ||
+							trimmedLine.startsWith('Downloading') ||
+							trimmedLine.includes('% of') ||
 							trimmedLine.includes('MiB/s') ||
-							trimmedLine.includes('ETA ') ||
+							trimmedLine.includes('ETA') ||
 							trimmedLine.includes('DOWNLOAD_FAILED')) {
 							continue;
 						}
@@ -256,25 +261,55 @@ export class TranscriptionService {
 				return;
 			}
 
-			const content = await this.app.vault.read(file);
+			let content = await this.app.vault.read(file);
 			const transcriptionSection = `## Transcription\n\n${transcription.trim()}`;
 
-			this.debugLog('Original content contains placeholder:', content.includes('{{transcription}}'));
-			this.debugLog('Transcription section to insert:', transcriptionSection.substring(0, 100));
-
-			const updatedContent = content.replace(/{{transcription}}/g, transcriptionSection);
-
-			if (updatedContent === content) {
-				this.debugLog('Warning - No placeholder found to replace!');
-				this.debugLog('Content preview:', content.substring(0, 500));
+			// Check if placeholder exists
+			if (content.includes('{{transcription}}')) {
+				// Replace placeholder
+				content = content.replace(/{{transcription}}/g, transcriptionSection);
+				this.debugLog('Replaced transcription placeholder');
+			} else {
+				// Append at the end
+				content = content + '\n\n' + transcriptionSection;
+				this.debugLog('Appended transcription at end of file');
 			}
 
-			await this.app.vault.modify(file, updatedContent);
+			// Add transcribed property to frontmatter if enabled
+			if (this.settings.addTranscriptionPropertyToFrontmatter) {
+				content = this.addTranscribedProperty(content);
+			}
+
+			await this.app.vault.modify(file, content);
 
 			this.debugLog(`Transcription updated for ${filePath}`);
+
+			// Show completion notification if enabled
+			if (this.settings.showTranscriptionCompleteNotification) {
+				const fileName = file.basename;
+				new Notice(`Transcription complete for ${fileName}!`);
+			}
 		} catch (error) {
 			console.error('TikToker: Failed to update file with transcription:', error);
 		}
+	}
+
+	private addTranscribedProperty(content: string): string {
+		// Check if file has frontmatter
+		if (content.startsWith('---\n')) {
+			const frontmatterEnd = content.indexOf('\n---\n', 4);
+			if (frontmatterEnd !== -1) {
+				const frontmatter = content.substring(4, frontmatterEnd);
+				const body = content.substring(frontmatterEnd + 5);
+
+				// Check if transcribed property already exists
+				if (!frontmatter.includes('transcribed:')) {
+					const newFrontmatter = frontmatter + '\ntranscribed: true';
+					return `---\n${newFrontmatter}\n---\n${body}`;
+				}
+			}
+		}
+		return content;
 	}
 
 	async getTranscription(url: string, videoId: string | null, isBulkProcessing: boolean = false): Promise<string> {
@@ -298,9 +333,9 @@ export class TranscriptionService {
 		}
 
 		try {
-			const { exec } = await import('child_process');
-			const { promisify } = await import('util');
-			const fs = await import('fs');
+			const { exec } = require('child_process');
+			const { promisify } = require('util');
+			const fs = require('fs');
 
 			const execAsync = promisify(exec);
 
@@ -361,16 +396,16 @@ export class TranscriptionService {
 					for (const line of lines) {
 						const trimmedLine = line.trim();
 
-						if (trimmedLine.startsWith('[TikTok]') ||
-							trimmedLine.startsWith('[info]') ||
-							trimmedLine.startsWith('[download]') ||
-							trimmedLine.startsWith('[ExtractAudio]') ||
-							trimmedLine.startsWith('Extracting cookies') ||
-							trimmedLine.startsWith('Extracted ') ||
-							trimmedLine.startsWith('Deleting original file') ||
-							trimmedLine.includes('% of ') ||
+						// Filter out yt-dlp and script output
+						if (trimmedLine.startsWith('[') ||  // All bracketed messages [TikTok], [info], [download], [vm.tiktok], etc.
+							trimmedLine.startsWith('Extracting') ||
+							trimmedLine.startsWith('Extracted') ||
+							trimmedLine.startsWith('Deleting') ||
+							trimmedLine.startsWith('Saved:') ||
+							trimmedLine.startsWith('Downloading') ||
+							trimmedLine.includes('% of') ||
 							trimmedLine.includes('MiB/s') ||
-							trimmedLine.includes('ETA ')) {
+							trimmedLine.includes('ETA')) {
 							continue;
 						}
 
@@ -436,6 +471,8 @@ export class SingleTranscriptionModal extends Modal {
 	isMinimized: boolean = false;
 	interval: any;
 	service: TranscriptionService;
+	content: HTMLDivElement | null = null;
+	minimizeBtn: HTMLButtonElement | null = null;
 
 	constructor(app: App, fileName: string, data: any, service: TranscriptionService) {
 		super(app);
@@ -489,18 +526,9 @@ export class SingleTranscriptionModal extends Modal {
 		const content = contentEl.createDiv({cls: 'transcription-modal-content'});
 		content.style.cssText = `padding: 16px;`;
 
-		const fileSection = content.createDiv({cls: 'file-section'});
-		fileSection.style.cssText = `margin-bottom: 20px;`;
-
-		fileSection.createEl('div', {text: '✅ File created successfully'}).style.cssText = `
-			color: var(--text-success);
-			font-size: 0.9em;
-			margin-bottom: 4px;
-		`;
-		fileSection.createEl('div', {text: this.fileName, cls: 'file-name'}).style.cssText = `
-			font-size: 0.8em;
-			color: var(--text-muted);
-		`;
+		// Save references for backdrop click handler
+		this.content = content;
+		this.minimizeBtn = minimizeBtn;
 
 		const transcriptionSection = content.createDiv({cls: 'transcription-section'});
 		transcriptionSection.createEl('h4', {text: 'Transcription'}).style.margin = '0 0 8px 0';
@@ -544,6 +572,15 @@ export class SingleTranscriptionModal extends Modal {
 		};
 
 		this.startProgressTracking();
+
+		// Add backdrop click handler to minimize instead of close
+		this.containerEl.addEventListener('click', (e) => {
+			if (e.target === this.containerEl && !this.isMinimized) {
+				e.stopPropagation();
+				e.preventDefault();
+				this.toggleMinimize(content, minimizeBtn);
+			}
+		});
 	}
 
 	toggleMinimize(content: HTMLDivElement, button: HTMLButtonElement) {
@@ -552,11 +589,43 @@ export class SingleTranscriptionModal extends Modal {
 		if (this.isMinimized) {
 			content.style.display = 'none';
 			button.textContent = '+';
-			this.modalEl.style.width = '200px';
+			this.modalEl.style.cssText = `
+				position: fixed !important;
+				bottom: 20px !important;
+				right: 20px !important;
+				top: auto !important;
+				left: auto !important;
+				width: 250px;
+				max-width: 250px;
+				z-index: 1000;
+				transform: none !important;
+				cursor: pointer;
+			`;
+
+			// Make entire modal clickable when minimized
+			this.modalEl.onclick = () => {
+				if (this.isMinimized) {
+					this.toggleMinimize(content, button);
+				}
+			};
 		} else {
 			content.style.display = 'block';
 			button.textContent = '−';
-			this.modalEl.style.width = '320px';
+			this.modalEl.style.cssText = `
+				position: fixed !important;
+				top: 20px !important;
+				right: 20px !important;
+				left: auto !important;
+				bottom: auto !important;
+				width: 320px;
+				max-width: 320px;
+				z-index: 1000;
+				transform: none !important;
+				cursor: default;
+			`;
+
+			// Remove click handler when expanded
+			this.modalEl.onclick = null;
 		}
 	}
 

@@ -29,8 +29,21 @@ interface TikTokerSettings {
 	bypassModalForSingle: boolean;
 	showBulkProcessingProgress: boolean;
 	enableTranscription: boolean;
+	enableTranscriptionOnCreation: boolean;
+	enableManualTranscriptionCommand: boolean;
+	enableBulkTranscription: boolean;
+	transcriptionDefaultForBulk: boolean;
+	addTranscriptionPropertyToFrontmatter: boolean;
+	showTranscriptionCompleteNotification: boolean;
 	openNoteOnCreation: boolean;
 	debugMode: boolean;
+	// Storage Settings
+	keepAudioFiles: boolean;
+	keepTranscriptFiles: boolean;
+	autoCleanupAfterTranscription: boolean;
+	enableGlobalCache: boolean;
+	globalCacheMaxSizeMB: number;
+	autoClearCacheAfterDays: number;
 	// Review Queue Settings
 	reviewQueueShowProgressBar: boolean;
 	reviewQueueEnableTransitions: boolean;
@@ -50,7 +63,7 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	includeExpandedUrl: false,
 	includeTagsFromHashtags: true,
 	customProperties: '',
-	transcriptionApi: 'none',
+	transcriptionApi: 'whisper-local',
 	whisperScriptPath: '',
 	whisperModel: 'base',
 	whisperBrowser: 'chrome',
@@ -63,9 +76,22 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	enableBulkProcessing: true,
 	bypassModalForSingle: true,
 	showBulkProcessingProgress: true,
-	enableTranscription: false,
+	enableTranscription: true,
+	enableTranscriptionOnCreation: true,
+	enableManualTranscriptionCommand: true,
+	enableBulkTranscription: true,
+	transcriptionDefaultForBulk: true,
+	addTranscriptionPropertyToFrontmatter: true,
+	showTranscriptionCompleteNotification: true,
 	openNoteOnCreation: true,
 	debugMode: false,
+	// Storage Settings
+	keepAudioFiles: false,
+	keepTranscriptFiles: false,
+	autoCleanupAfterTranscription: true,
+	enableGlobalCache: true,
+	globalCacheMaxSizeMB: 200,
+	autoClearCacheAfterDays: 7,
 	// Review Queue Settings
 	reviewQueueShowProgressBar: true,
 	reviewQueueEnableTransitions: true,
@@ -86,6 +112,16 @@ export default class TikTokerPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
+		// Auto-detect whisper script path if not set
+		if (!this.settings.whisperScriptPath && !Platform.isMobile) {
+			const path = require('path');
+			const pluginDir = (this.manifest as any).dir || '';
+			const autoScriptPath = path.join(pluginDir, 'whisper-scripts', 'tiktok2text.sh');
+			this.settings.whisperScriptPath = autoScriptPath;
+			await this.saveSettings();
+			this.debugLog('Auto-detected whisper script path:', autoScriptPath);
+		}
+
 		// Initialize transcription service
 		const transcriptionSettings: TranscriptionSettings = {
 			transcriptionApi: this.settings.transcriptionApi,
@@ -93,6 +129,11 @@ export default class TikTokerPlugin extends Plugin {
 			whisperModel: this.settings.whisperModel,
 			whisperBrowser: this.settings.whisperBrowser,
 			enableTranscription: this.settings.enableTranscription,
+			enableManualTranscriptionCommand: this.settings.enableManualTranscriptionCommand,
+			enableTranscriptionOnCreation: this.settings.enableTranscriptionOnCreation,
+			enableBulkTranscription: this.settings.enableBulkTranscription,
+			addTranscriptionPropertyToFrontmatter: this.settings.addTranscriptionPropertyToFrontmatter,
+			showTranscriptionCompleteNotification: this.settings.showTranscriptionCompleteNotification,
 			urlTimeout: this.settings.urlTimeout,
 			debugMode: this.settings.debugMode
 		};
@@ -143,6 +184,14 @@ export default class TikTokerPlugin extends Plugin {
 			}
 		});
 
+		this.addCommand({
+			id: 'test-transcription-setup',
+			name: 'Test Transcription Setup',
+			callback: () => {
+				this.testTranscriptionSetup();
+			}
+		});
+
 		this.addSettingTab(new TikTokerSettingTab(this.app, this));
 	}
 
@@ -186,7 +235,7 @@ export default class TikTokerPlugin extends Plugin {
 				// Show bulk processing modal
 				const modal = new BulkProcessingModal(this.app, tikTokUrls, (selectedUrls, enableTranscription) => {
 					this.processBulkTikToks(selectedUrls, enableTranscription);
-				});
+				}, this.settings.transcriptionDefaultForBulk);
 				modal.open();
 			} else {
 				// Process single URL (existing behavior)
@@ -1377,10 +1426,30 @@ export default class TikTokerPlugin extends Plugin {
 				}
 			}
 
-			// Start transcription asynchronously if enabled and not a slideshow
-			if (this.settings.transcriptionApi !== 'none' && !data.isSlideshow && !data.isPrivate) {
-				if (!isBulkProcessing) {
+			// Start transcription asynchronously if enabled and not a slideshow (desktop only)
+			const shouldTranscribe = !Platform.isMobile &&
+									this.settings.enableTranscription &&
+									this.settings.transcriptionApi !== 'none' &&
+									!data.isSlideshow &&
+									!data.isPrivate;
+
+			this.debugLog('Transcription check:', {
+				isMobile: Platform.isMobile,
+				enableTranscription: this.settings.enableTranscription,
+				transcriptionApi: this.settings.transcriptionApi,
+				isSlideshow: data.isSlideshow,
+				isPrivate: data.isPrivate,
+				isBulkProcessing,
+				enableTranscriptionOnCreation: this.settings.enableTranscriptionOnCreation,
+				shouldTranscribe
+			});
+
+			if (shouldTranscribe) {
+				const autoTranscribeEnabled = this.settings.enableTranscriptionOnCreation;
+
+				if (!isBulkProcessing && autoTranscribeEnabled) {
 					// For single TikTok, show integrated modal with transcription
+					this.debugLog('Showing transcription modal for single TikTok');
 					this.transcriptionService.showSingleTranscriptionModal(data.url, data.videoId, filePath, data);
 				}
 				// For bulk processing, transcription will be handled separately with progress tracking
@@ -1484,7 +1553,10 @@ export default class TikTokerPlugin extends Plugin {
 		let transcriptionContent = '';
 		if (data.transcription && data.transcription.trim()) {
 			transcriptionContent = `## Transcription\n\n${data.transcription.trim()}`;
-		} else if (this.settings.transcriptionApi !== 'none' && !data.isSlideshow && !data.isPrivate) {
+		} else if (this.settings.enableTranscription &&
+				   this.settings.transcriptionApi !== 'none' &&
+				   !data.isSlideshow &&
+				   !data.isPrivate) {
 			// Leave placeholder for async transcription update
 			transcriptionContent = '{{transcription}}';
 		}
@@ -1539,13 +1611,17 @@ export default class TikTokerPlugin extends Plugin {
 					isPrivate: result.isPrivate
 				});
 
-				// Start transcription if applicable
-				if (result.success && result.filePath && result.data && 
-					this.settings.transcriptionApi !== 'none' && 
+				// Start transcription if applicable (desktop only)
+				if (!Platform.isMobile &&
+					result.success && result.filePath && result.data &&
+					this.settings.enableTranscription &&
+					this.settings.enableBulkTranscription &&
+					enableTranscription &&
+					this.settings.transcriptionApi !== 'none' &&
 					!result.data.isSlideshow && !result.data.isPrivate) {
-					
-					modal.updateTranscriptionStatus(url, 'started');
-					
+
+					modal.updateTranscriptionStatus(url, 'started', undefined, result.data);
+
 					const transcriptionTask = this.transcriptionService.startAsyncTranscription(
 						result.data.url,
 						result.data.videoId,
@@ -1553,9 +1629,9 @@ export default class TikTokerPlugin extends Plugin {
 						true,
 						(status: string, timeElapsed?: number) => {
 							if (status === 'Completed') {
-								modal.updateTranscriptionStatus(url, 'completed', timeElapsed);
+								modal.updateTranscriptionStatus(url, 'completed', timeElapsed, result.data);
 							} else if (status === 'Failed') {
-								modal.updateTranscriptionStatus(url, 'failed', timeElapsed);
+								modal.updateTranscriptionStatus(url, 'failed', timeElapsed, result.data);
 							}
 						}
 					);
@@ -1683,18 +1759,321 @@ export default class TikTokerPlugin extends Plugin {
 		return await this.createTikTokNote(data, false);
 	}
 
+	async testTranscriptionSetup() {
+		if (Platform.isMobile) {
+			new Notice('Transcription setup test is only available on desktop');
+			return;
+		}
+
+		new Notice('Testing transcription setup...');
+
+		try {
+			const { exec } = require('child_process');
+			const { promisify } = require('util');
+			const path = require('path');
+			const os = require('os');
+
+			const execAsync = promisify(exec);
+
+			// Get absolute path to vault and plugin directory
+			const vaultPath = (this.app.vault.adapter as any).basePath || '';
+			const pluginDir = (this.manifest as any).dir || '';
+			const absolutePluginDir = path.join(vaultPath, pluginDir);
+			const scriptPath = path.join(absolutePluginDir, 'whisper-scripts', 'manage_whisper.py');
+
+			this.debugLog('Testing setup with script path:', scriptPath);
+
+			const { stdout, stderr } = await execAsync(`python3 "${scriptPath}" check`, {
+				timeout: 10000
+			});
+
+			// Parse dependency status from output
+			const dependencies = {
+				python3: stdout.includes('✓ Python 3'),
+				ytdlp: stdout.includes('✓ yt-dlp'),
+				ffmpeg: stdout.includes('✓ FFmpeg'),
+				venv: stdout.includes('✓ Python venv'),
+				whisper: stdout.includes('✓ faster-whisper')
+			};
+
+			const platform = os.platform(); // 'darwin', 'win32', 'linux'
+			const modal = new DependencyCheckModal(this.app, dependencies, platform, stdout);
+			modal.open();
+
+		} catch (error) {
+			new Notice('Failed to run setup test');
+			console.error('Setup test error:', error);
+		}
+	}
+
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+		// Update transcription service settings
+		this.transcriptionService.settings = {
+			transcriptionApi: this.settings.transcriptionApi,
+			whisperScriptPath: this.settings.whisperScriptPath,
+			whisperModel: this.settings.whisperModel,
+			whisperBrowser: this.settings.whisperBrowser,
+			enableTranscription: this.settings.enableTranscription,
+			enableManualTranscriptionCommand: this.settings.enableManualTranscriptionCommand,
+			enableTranscriptionOnCreation: this.settings.enableTranscriptionOnCreation,
+			enableBulkTranscription: this.settings.enableBulkTranscription,
+			addTranscriptionPropertyToFrontmatter: this.settings.addTranscriptionPropertyToFrontmatter,
+			showTranscriptionCompleteNotification: this.settings.showTranscriptionCompleteNotification,
+			urlTimeout: this.settings.urlTimeout,
+			debugMode: this.settings.debugMode
+		};
 	}
 
 }
 
+// TestResultModal - shows transcription setup test results
+class TestResultModal extends Modal {
+	result: string;
+	hasErrors: boolean;
+
+	constructor(app: App, result: string, hasErrors: boolean) {
+		super(app);
+		this.result = result;
+		this.hasErrors = hasErrors;
+	}
+
+	onOpen() {
+		const {contentEl} = this;
+		contentEl.empty();
+
+		contentEl.createEl('h2', {text: 'Transcription Setup Test'});
+
+		const resultContainer = contentEl.createDiv({cls: 'transcription-test-result'});
+		resultContainer.style.cssText = `
+			padding: 16px;
+			background-color: var(--background-secondary);
+			border-radius: 4px;
+			font-family: var(--font-monospace);
+			font-size: 0.9em;
+			white-space: pre-wrap;
+			max-height: 400px;
+			overflow-y: auto;
+		`;
+
+		resultContainer.textContent = this.result;
+
+		const buttonContainer = contentEl.createDiv({cls: 'modal-button-container'});
+		buttonContainer.style.cssText = 'margin-top: 16px; display: flex; justify-content: flex-end;';
+
+		if (this.hasErrors) {
+			const installButton = buttonContainer.createEl('button', {text: 'Install Instructions', cls: 'mod-cta'});
+			installButton.style.marginRight = '8px';
+			installButton.onclick = () => {
+				window.open('https://brew.sh', '_blank');
+			};
+		}
+
+		const closeButton = buttonContainer.createEl('button', {text: 'Close'});
+		closeButton.onclick = () => this.close();
+	}
+
+	onClose() {
+		const {contentEl} = this;
+		contentEl.empty();
+	}
+}
+
+// DependencyCheckModal - smart dependency checker with installation instructions
+class DependencyCheckModal extends Modal {
+	dependencies: {python3: boolean, ytdlp: boolean, ffmpeg: boolean, venv: boolean, whisper: boolean};
+	platform: string;
+	rawOutput: string;
+
+	constructor(app: App, dependencies: any, platform: string, rawOutput: string) {
+		super(app);
+		this.dependencies = dependencies;
+		this.platform = platform;
+		this.rawOutput = rawOutput;
+	}
+
+	getInstallCommands(): {[key: string]: string} {
+		if (this.platform === 'darwin') {
+			// macOS
+			return {
+				python3: 'brew install python3',
+				ytdlp: 'brew install yt-dlp',
+				ffmpeg: 'brew install ffmpeg',
+				homebrew: '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+			};
+		} else if (this.platform === 'win32') {
+			// Windows
+			return {
+				python3: 'winget install Python.Python.3.11',
+				ytdlp: 'winget install yt-dlp.yt-dlp',
+				ffmpeg: 'winget install Gyan.FFmpeg'
+			};
+		} else {
+			// Linux (Ubuntu/Debian)
+			return {
+				python3: 'sudo apt install python3 python3-pip',
+				ytdlp: 'sudo apt install yt-dlp',
+				ffmpeg: 'sudo apt install ffmpeg'
+			};
+		}
+	}
+
+	copyToClipboard(text: string, button: HTMLButtonElement) {
+		navigator.clipboard.writeText(text).then(() => {
+			const originalText = button.textContent;
+			button.textContent = 'Copied!';
+			button.style.backgroundColor = 'var(--interactive-success)';
+			setTimeout(() => {
+				button.textContent = originalText;
+				button.style.backgroundColor = '';
+			}, 2000);
+		});
+	}
+
+	onOpen() {
+		const {contentEl} = this;
+		contentEl.empty();
+
+		contentEl.createEl('h2', {text: 'Dependency Check'});
+
+		// Status section
+		const statusSection = contentEl.createDiv({cls: 'dependency-status'});
+		statusSection.style.cssText = 'margin: 16px 0; padding: 16px; background-color: var(--background-secondary); border-radius: 4px;';
+
+		const allOk = Object.values(this.dependencies).every(val => val);
+
+		if (allOk) {
+			statusSection.createEl('div', {
+				text: '✓ All dependencies installed!',
+				cls: 'dependency-success'
+			}).style.cssText = 'color: var(--interactive-success); font-weight: 600; margin-bottom: 12px;';
+		} else {
+			statusSection.createEl('div', {
+				text: 'Some dependencies are missing',
+				cls: 'dependency-warning'
+			}).style.cssText = 'color: var(--text-warning); font-weight: 600; margin-bottom: 12px;';
+		}
+
+		// Dependency list
+		const depList = statusSection.createEl('div');
+		depList.style.cssText = 'font-family: var(--font-monospace); font-size: 0.9em;';
+
+		const depLabels = {
+			python3: 'Python 3',
+			ytdlp: 'yt-dlp',
+			ffmpeg: 'FFmpeg',
+			venv: 'Python venv',
+			whisper: 'faster-whisper'
+		};
+
+		Object.entries(this.dependencies).forEach(([key, installed]) => {
+			const line = depList.createEl('div');
+			line.style.cssText = 'margin: 4px 0;';
+			line.textContent = `${installed ? '✓' : '✗'} ${depLabels[key as keyof typeof depLabels]}`;
+			line.style.color = installed ? 'var(--interactive-success)' : 'var(--text-error)';
+		});
+
+		// Installation section (only if missing dependencies)
+		if (!allOk) {
+			const installSection = contentEl.createDiv({cls: 'installation-instructions'});
+			installSection.style.cssText = 'margin: 16px 0;';
+
+			installSection.createEl('h3', {text: 'Installation Instructions'});
+
+			const instructions = installSection.createDiv();
+			instructions.style.cssText = 'padding: 16px; background-color: var(--background-secondary); border-radius: 4px;';
+
+			const commands = this.getInstallCommands();
+
+			// Platform-specific intro
+			if (this.platform === 'darwin' && !this.dependencies.python3 && !this.dependencies.ytdlp && !this.dependencies.ffmpeg) {
+				const homebrewNote = instructions.createDiv();
+				homebrewNote.style.cssText = 'margin-bottom: 16px; padding: 12px; background-color: var(--background-modifier-border); border-radius: 4px;';
+				homebrewNote.createEl('strong', {text: 'First, install Homebrew (package manager): '});
+				homebrewNote.createEl('br');
+				homebrewNote.createEl('br');
+				const brewCode = homebrewNote.createEl('code');
+				brewCode.textContent = commands.homebrew;
+				brewCode.style.cssText = 'font-size: 0.85em; padding: 4px 8px; background: var(--background-primary); border-radius: 3px; display: block; margin: 8px 0;';
+				const brewBtn = homebrewNote.createEl('button', {text: 'Copy'});
+				brewBtn.style.cssText = 'margin-top: 8px;';
+				brewBtn.onclick = () => this.copyToClipboard(commands.homebrew, brewBtn);
+			}
+
+			instructions.createEl('p', {text: 'Run these commands in your terminal:'}).style.fontWeight = '600';
+
+			// Show commands for missing dependencies
+			if (!this.dependencies.python3) {
+				this.createCommandBlock(instructions, 'Python 3', commands.python3);
+			}
+			if (!this.dependencies.ytdlp) {
+				this.createCommandBlock(instructions, 'yt-dlp', commands.ytdlp);
+			}
+			if (!this.dependencies.ffmpeg) {
+				this.createCommandBlock(instructions, 'FFmpeg', commands.ffmpeg);
+			}
+			if (!this.dependencies.venv || !this.dependencies.whisper) {
+				const venvNote = instructions.createDiv();
+				venvNote.style.cssText = 'margin-top: 16px; padding: 12px; background-color: var(--background-modifier-border); border-radius: 4px;';
+				venvNote.createEl('strong', {text: 'Note: '});
+				venvNote.appendText('Python venv and faster-whisper will be automatically set up when you first run a transcription.');
+			}
+		}
+
+		// Raw output (collapsible)
+		const detailsSection = contentEl.createDiv();
+		detailsSection.style.cssText = 'margin-top: 16px;';
+
+		const detailsToggle = detailsSection.createEl('div');
+		detailsToggle.style.cssText = 'cursor: pointer; padding: 8px; background-color: var(--background-secondary); border-radius: 4px; user-select: none;';
+		detailsToggle.textContent = '▶ Show detailed output';
+
+		const detailsContent = detailsSection.createEl('pre');
+		detailsContent.style.cssText = 'display: none; margin-top: 8px; padding: 12px; background-color: var(--background-secondary); border-radius: 4px; font-family: var(--font-monospace); font-size: 0.85em; white-space: pre-wrap; max-height: 200px; overflow-y: auto;';
+		detailsContent.textContent = this.rawOutput;
+
+		let expanded = false;
+		detailsToggle.onclick = () => {
+			expanded = !expanded;
+			detailsContent.style.display = expanded ? 'block' : 'none';
+			detailsToggle.textContent = expanded ? '▼ Hide detailed output' : '▶ Show detailed output';
+		};
+
+		// Close button
+		const buttonContainer = contentEl.createDiv();
+		buttonContainer.style.cssText = 'margin-top: 16px; display: flex; justify-content: flex-end;';
+
+		const closeButton = buttonContainer.createEl('button', {text: 'Close', cls: 'mod-cta'});
+		closeButton.onclick = () => this.close();
+	}
+
+	createCommandBlock(container: HTMLElement, name: string, command: string) {
+		const block = container.createDiv();
+		block.style.cssText = 'margin: 12px 0; padding: 12px; background-color: var(--background-modifier-border); border-radius: 4px;';
+
+		block.createEl('div', {text: name}).style.cssText = 'font-weight: 600; margin-bottom: 8px;';
+
+		const codeBlock = block.createEl('code');
+		codeBlock.textContent = command;
+		codeBlock.style.cssText = 'font-size: 0.85em; padding: 8px 12px; background: var(--background-primary); border-radius: 3px; display: block; margin-bottom: 8px;';
+
+		const copyBtn = block.createEl('button', {text: 'Copy Command'});
+		copyBtn.onclick = () => this.copyToClipboard(command, copyBtn);
+	}
+
+	onClose() {
+		const {contentEl} = this;
+		contentEl.empty();
+	}
+}
+
 class TikTokerSettingTab extends PluginSettingTab {
 	plugin: TikTokerPlugin;
+	activeTab: 'general' | 'transcription' | 'storage' | 'review' = 'general';
 
 	constructor(app: App, plugin: TikTokerPlugin) {
 		super(app, plugin);
@@ -1707,11 +2086,114 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 		containerEl.createEl('h2', {text: 'TikToker Settings'});
 
-		const availableVariables = containerEl.createEl('div', {cls: 'setting-item-description'});
-		const strongEl = availableVariables.createEl('strong', {text: 'Available template variables:'});
-		availableVariables.appendText(' {{author}}, {{description}}, {{hashtags}}, {{iframe}}, {{transcription}}, {{date}}, {{url}}');
+		// Create tab navigation
+		const tabNav = containerEl.createDiv({cls: 'tiktok-settings-tabs'});
+		tabNav.style.cssText = `
+			display: flex;
+			gap: 8px;
+			margin-bottom: 24px;
+			border-bottom: 2px solid var(--background-modifier-border);
+			padding-bottom: 8px;
+		`;
 
-		new Setting(containerEl)
+		let tabs = [
+			{id: 'general' as const, label: 'General'},
+			{id: 'transcription' as const, label: 'Transcription'},
+			{id: 'storage' as const, label: 'Storage'},
+			{id: 'review' as const, label: 'Review Queue'}
+		];
+
+		// Hide transcription tab on mobile (desktop only feature)
+		if (Platform.isMobile) {
+			tabs = tabs.filter(tab => tab.id !== 'transcription');
+		}
+
+		tabs.forEach(tab => {
+			const tabButton = tabNav.createEl('button', {text: tab.label});
+			tabButton.style.cssText = `
+				padding: 8px 16px;
+				border: none;
+				background: ${this.activeTab === tab.id ? 'var(--interactive-accent)' : 'transparent'};
+				color: ${this.activeTab === tab.id ? 'var(--text-on-accent)' : 'var(--text-normal)'};
+				cursor: pointer;
+				border-radius: 4px;
+				font-weight: ${this.activeTab === tab.id ? '600' : '400'};
+			`;
+			tabButton.onclick = () => {
+				this.activeTab = tab.id;
+				this.display();
+			};
+		});
+
+		// Tab content
+		const tabContent = containerEl.createDiv({cls: 'tiktok-settings-content'});
+
+		switch (this.activeTab) {
+			case 'general':
+				this.renderGeneralTab(tabContent);
+				break;
+			case 'transcription':
+				this.renderTranscriptionTab(tabContent);
+				break;
+			case 'storage':
+				this.renderStorageTab(tabContent);
+				break;
+			case 'review':
+				this.renderReviewTab(tabContent);
+				break;
+		}
+	}
+
+	createCollapsibleSection(container: HTMLElement, title: string, defaultOpen: boolean = true): HTMLElement {
+		const section = container.createDiv({cls: 'setting-section'});
+		section.style.marginBottom = '24px';
+
+		const header = section.createDiv({cls: 'setting-section-header'});
+		header.style.cssText = `
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			cursor: pointer;
+			padding: 8px 0;
+			border-bottom: 1px solid var(--background-modifier-border);
+			margin-bottom: 16px;
+			font-weight: 600;
+			font-size: 1.1em;
+		`;
+
+		const arrow = header.createSpan({text: defaultOpen ? '▼' : '▶'});
+		arrow.style.fontSize = '0.8em';
+		header.createSpan({text: title});
+
+		const content = section.createDiv({cls: 'setting-section-content'});
+		content.style.display = defaultOpen ? 'block' : 'none';
+
+		header.onclick = () => {
+			const isOpen = content.style.display !== 'none';
+			content.style.display = isOpen ? 'none' : 'block';
+			arrow.textContent = isOpen ? '▶' : '▼';
+		};
+
+		return content;
+	}
+
+	renderGeneralTab(container: HTMLElement): void {
+		const variablesInfo = container.createEl('div', {cls: 'setting-item-description'});
+		variablesInfo.style.cssText = 'margin-bottom: 24px; padding: 12px; background-color: var(--background-secondary); border-radius: 4px;';
+		variablesInfo.createEl('strong', {text: 'Available template variables: '});
+		variablesInfo.appendText('{{author}}, {{description}}, {{hashtags}}, {{iframe}}, {{transcription}}, {{date}}, {{url}}');
+
+		// Mobile transcription note
+		if (Platform.isMobile) {
+			const mobileNote = container.createEl('div', {cls: 'setting-item-description'});
+			mobileNote.style.cssText = 'margin-bottom: 24px; padding: 12px; background-color: var(--background-modifier-error-hover); border-radius: 4px; border-left: 4px solid var(--interactive-accent);';
+			mobileNote.createEl('strong', {text: 'Note: '});
+			mobileNote.appendText('Transcription is only available on desktop (Windows, macOS, Linux) from version 1.5.0 onwards. Mobile devices can create TikTok notes but cannot generate transcriptions.');
+		}
+
+		const basicSection = this.createCollapsibleSection(container, 'Basic Settings');
+
+		new Setting(basicSection)
 			.setName('Output Folder')
 			.setDesc('Folder where TikTok notes will be saved')
 			.addText(text => text
@@ -1722,7 +2204,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
+		new Setting(basicSection)
 			.setName('File Naming Pattern')
 			.setDesc('Pattern for generating file names')
 			.addText(text => text
@@ -1733,7 +2215,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
+		new Setting(basicSection)
 			.setName('Note Title Template')
 			.setDesc('Template for generating note titles')
 			.addText(text => text
@@ -1744,8 +2226,9 @@ class TikTokerSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		const contentSection = this.createCollapsibleSection(container, 'Content & Properties');
 
-		new Setting(containerEl)
+		new Setting(contentSection)
 			.setName('Enable Properties')
 			.setDesc('Include frontmatter properties in notes')
 			.addToggle(toggle => toggle
@@ -1753,12 +2236,12 @@ class TikTokerSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.enableProperties = value;
 					await this.plugin.saveSettings();
+					this.display();
 				}));
 
 		if (this.plugin.settings.enableProperties) {
-			new Setting(containerEl)
+			new Setting(contentSection)
 				.setName('Include Author')
-				.setDesc('Add author to frontmatter')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.includeAuthor)
 					.onChange(async (value) => {
@@ -1766,9 +2249,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}));
 
-			new Setting(containerEl)
+			new Setting(contentSection)
 				.setName('Include Date Created')
-				.setDesc('Add creation date to frontmatter')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.includeDateCreated)
 					.onChange(async (value) => {
@@ -1776,9 +2258,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}));
 
-			new Setting(containerEl)
+			new Setting(contentSection)
 				.setName('Include URL')
-				.setDesc('Add original URL to frontmatter')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.includeUrl)
 					.onChange(async (value) => {
@@ -1786,9 +2267,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}));
 
-			new Setting(containerEl)
+			new Setting(contentSection)
 				.setName('Include Expanded URL')
-				.setDesc('Add canonical/expanded URL to frontmatter (for shortened links)')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.includeExpandedUrl)
 					.onChange(async (value) => {
@@ -1796,9 +2276,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}));
 
-			new Setting(containerEl)
+			new Setting(contentSection)
 				.setName('Include Tags from Hashtags')
-				.setDesc('Convert hashtags to frontmatter tags')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.includeTagsFromHashtags)
 					.onChange(async (value) => {
@@ -1807,9 +2286,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 		}
 
-		new Setting(containerEl)
+		new Setting(contentSection)
 			.setName('Include Hashtags in Content')
-			.setDesc('Display hashtags in note content')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.includeHashtagsInContent)
 				.onChange(async (value) => {
@@ -1817,35 +2295,33 @@ class TikTokerSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
+		new Setting(contentSection)
 			.setName('Note Content Template')
 			.setDesc('Template for generating note content')
 			.addTextArea(text => text
-				.setPlaceholder('{{iframe}}\n\n## Description\n{{description}}\n\n## Hashtags\n{{hashtags}}')
+				.setPlaceholder('{{iframe}}\n\n## Description\n{{description}}')
 				.setValue(this.plugin.settings.noteContentTemplate)
 				.onChange(async (value) => {
 					this.plugin.settings.noteContentTemplate = value;
 					await this.plugin.saveSettings();
 				}));
 
-		// Bulk Processing Section
-		containerEl.createEl('h3', {text: 'Bulk Processing'});
+		const bulkSection = this.createCollapsibleSection(container, 'Bulk Processing');
 
-		new Setting(containerEl)
+		new Setting(bulkSection)
 			.setName('Enable Bulk Processing')
-			.setDesc('Allow processing multiple TikTok URLs at once when detected in clipboard')
+			.setDesc('Allow processing multiple TikTok URLs at once')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableBulkProcessing)
 				.onChange(async (value) => {
 					this.plugin.settings.enableBulkProcessing = value;
 					await this.plugin.saveSettings();
-					this.display(); // Refresh to show/hide dependent settings
+					this.display();
 				}));
 
 		if (this.plugin.settings.enableBulkProcessing) {
-			new Setting(containerEl)
+			new Setting(bulkSection)
 				.setName('Bypass Modal for Single URL')
-				.setDesc('Skip the bulk processing modal when only one TikTok URL is detected')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.bypassModalForSingle)
 					.onChange(async (value) => {
@@ -1853,9 +2329,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}));
 
-			new Setting(containerEl)
+			new Setting(bulkSection)
 				.setName('Show Progress During Bulk Processing')
-				.setDesc('Display progress modal while processing multiple URLs')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.showBulkProcessingProgress)
 					.onChange(async (value) => {
@@ -1864,9 +2339,9 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 		}
 
-		new Setting(containerEl)
+		new Setting(bulkSection)
 			.setName('Open Note on Creation')
-			.setDesc('Automatically open TikTok notes in the editor when created')
+			.setDesc('Automatically open notes after creation')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.openNoteOnCreation)
 				.onChange(async (value) => {
@@ -1874,11 +2349,10 @@ class TikTokerSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		containerEl.createEl('h3', {text: 'Advanced'});
+		const advancedSection = this.createCollapsibleSection(container, 'Advanced', false);
 
-		new Setting(containerEl)
+		new Setting(advancedSection)
 			.setName('URL Timeout (seconds)')
-			.setDesc('Timeout for URL requests')
 			.addSlider(slider => slider
 				.setLimits(5, 30, 1)
 				.setValue(this.plugin.settings.urlTimeout)
@@ -1888,22 +2362,282 @@ class TikTokerSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
+		new Setting(advancedSection)
 			.setName('Debug Mode')
-			.setDesc('Enable verbose debug logging for troubleshooting')
+			.setDesc('Enable verbose debug logging')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.debugMode)
 				.onChange(async (value) => {
 					this.plugin.settings.debugMode = value;
 					await this.plugin.saveSettings();
 				}));
+	}
 
-		// Review Queue Settings Section
-		containerEl.createEl('h3', {text: 'Review Queue Settings'});
+	renderTranscriptionTab(container: HTMLElement): void {
+		const infoBox = container.createEl('div');
+		infoBox.style.cssText = 'margin-bottom: 24px; padding: 12px; background-color: var(--background-secondary); border-radius: 4px;';
+		infoBox.createEl('strong', {text: 'Desktop Only: '});
+		infoBox.appendText('Local transcription requires Python, yt-dlp, ffmpeg, and faster-whisper.');
 
-		new Setting(containerEl)
+		const mainSection = this.createCollapsibleSection(container, 'Transcription Settings');
+
+		new Setting(mainSection)
+			.setName('Enable Transcription')
+			.setDesc('Master toggle for all transcription features')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enableTranscription)
+				.onChange(async (value) => {
+					this.plugin.settings.enableTranscription = value;
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		if (this.plugin.settings.enableTranscription) {
+			// Force whisper-local if transcription is enabled
+			if (this.plugin.settings.transcriptionApi === 'none') {
+				this.plugin.settings.transcriptionApi = 'whisper-local';
+				this.plugin.saveSettings();
+			}
+
+			new Setting(mainSection)
+				.setName('Auto-transcribe on Creation')
+				.setDesc('Automatically transcribe when creating notes from clipboard')
+				.addToggle(toggle => toggle
+					.setValue(this.plugin.settings.enableTranscriptionOnCreation)
+					.onChange(async (value) => {
+						this.plugin.settings.enableTranscriptionOnCreation = value;
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(mainSection)
+				.setName('Enable Manual Transcription Command')
+				.setDesc('Show "Transcribe TikTok" command in command palette')
+				.addToggle(toggle => toggle
+					.setValue(this.plugin.settings.enableManualTranscriptionCommand)
+					.onChange(async (value) => {
+						this.plugin.settings.enableManualTranscriptionCommand = value;
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(mainSection)
+				.setName('Show Transcription in Bulk Processing')
+				.setDesc('Display transcription checkbox in bulk processing modal')
+				.addToggle(toggle => toggle
+					.setValue(this.plugin.settings.enableBulkTranscription)
+					.onChange(async (value) => {
+						this.plugin.settings.enableBulkTranscription = value;
+						await this.plugin.saveSettings();
+					}));
+
+			if (this.plugin.settings.enableBulkTranscription) {
+				new Setting(mainSection)
+					.setName('Transcription Default for Bulk')
+					.setDesc('Check transcription by default in bulk modal')
+					.addToggle(toggle => toggle
+						.setValue(this.plugin.settings.transcriptionDefaultForBulk)
+						.onChange(async (value) => {
+							this.plugin.settings.transcriptionDefaultForBulk = value;
+							await this.plugin.saveSettings();
+						}));
+			}
+
+			new Setting(mainSection)
+				.setName('Add Transcription Property')
+				.setDesc('Add "transcribed: true" to frontmatter when transcription is added')
+				.addToggle(toggle => toggle
+					.setValue(this.plugin.settings.addTranscriptionPropertyToFrontmatter)
+					.onChange(async (value) => {
+						this.plugin.settings.addTranscriptionPropertyToFrontmatter = value;
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(mainSection)
+				.setName('Show Completion Notification')
+				.setDesc('Show a toast notification when transcription completes (bottom-right corner)')
+				.addToggle(toggle => toggle
+					.setValue(this.plugin.settings.showTranscriptionCompleteNotification)
+					.onChange(async (value) => {
+						this.plugin.settings.showTranscriptionCompleteNotification = value;
+						await this.plugin.saveSettings();
+					}));
+
+			const modelSection = this.createCollapsibleSection(container, 'Model Management');
+
+			const modelInfo = modelSection.createEl('div');
+			modelInfo.style.cssText = 'margin-bottom: 16px; padding: 12px; background-color: var(--background-secondary); border-radius: 4px; font-size: 0.9em;';
+
+			const table = modelInfo.createEl('table');
+			table.style.cssText = 'width: 100%; border-collapse: collapse; font-family: var(--font-monospace);';
+
+			const thead = table.createEl('thead');
+			const headerRow = thead.createEl('tr');
+			['Model', 'Size', 'Speed', 'Quality', '1min Video'].forEach(header => {
+				const th = headerRow.createEl('th');
+				th.textContent = header;
+				th.style.cssText = 'text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--background-modifier-border);';
+			});
+
+			const tbody = table.createEl('tbody');
+			const models = [
+				['tiny', '75MB', 'Very Fast', 'Basic', '5-8s'],
+				['base', '142MB', 'Fast', 'Good', '8-12s'],
+				['small', '466MB', 'Medium', 'Very Good', '15-20s'],
+				['medium', '1.5GB', 'Slow', 'Excellent', '30-40s'],
+				['large', '2.9GB', 'Very Slow', 'Best', '60-90s']
+			];
+
+			models.forEach(model => {
+				const row = tbody.createEl('tr');
+				model.forEach((cell, i) => {
+					const td = row.createEl('td');
+					td.textContent = cell;
+					td.style.cssText = 'padding: 4px 8px;';
+					if (i === 0 && model[0] === 'base') {
+						td.style.fontWeight = '600';
+						td.style.color = 'var(--interactive-accent)';
+					}
+				});
+			});
+
+			const recommendation = modelInfo.createEl('div');
+			recommendation.style.cssText = 'margin-top: 8px; font-style: italic;';
+			recommendation.textContent = 'Recommendation: Use "base" model for best balance';
+
+			new Setting(modelSection)
+				.setName('Whisper Model')
+				.setDesc('Select transcription model (restart required)')
+				.addDropdown(dropdown => dropdown
+					.addOption('tiny', 'tiny (75MB)')
+					.addOption('base', 'base (142MB) - Recommended')
+					.addOption('small', 'small (466MB)')
+					.addOption('medium', 'medium (1.5GB)')
+					.addOption('large', 'large (2.9GB)')
+					.setValue(this.plugin.settings.whisperModel)
+					.onChange(async (value: any) => {
+						this.plugin.settings.whisperModel = value;
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(modelSection)
+				.setName('Browser for Cookies')
+				.setDesc('Which browser to use for cookie extraction')
+				.addDropdown(dropdown => dropdown
+					.addOption('chrome', 'Chrome')
+					.addOption('safari', 'Safari')
+					.setValue(this.plugin.settings.whisperBrowser)
+					.onChange(async (value: any) => {
+						this.plugin.settings.whisperBrowser = value;
+						await this.plugin.saveSettings();
+					}));
+
+			const testSection = this.createCollapsibleSection(container, 'Setup & Testing');
+
+			new Setting(testSection)
+				.setName('Test Transcription Setup')
+				.setDesc('Check if all dependencies are installed')
+				.addButton(button => button
+					.setButtonText('Run Test')
+					.setCta()
+					.onClick(async () => {
+						await this.plugin.testTranscriptionSetup();
+					}));
+
+			new Setting(testSection)
+				.setName('Whisper Script Path')
+				.setDesc('Path to transcription script (auto-detected if empty)')
+				.addText(text => text
+					.setPlaceholder('Auto-detect')
+					.setValue(this.plugin.settings.whisperScriptPath)
+					.onChange(async (value) => {
+						this.plugin.settings.whisperScriptPath = value;
+						await this.plugin.saveSettings();
+					}));
+		}
+	}
+
+	renderStorageTab(container: HTMLElement): void {
+		const infoBox = container.createEl('div');
+		infoBox.style.cssText = 'margin-bottom: 24px; padding: 12px; background-color: var(--background-secondary); border-radius: 4px;';
+		infoBox.innerHTML = '<strong>Storage Management:</strong> By default, temporary files are automatically cleaned up. Transcriptions are saved directly in notes.';
+
+		const cleanupSection = this.createCollapsibleSection(container, 'Storage & Cleanup');
+
+		new Setting(cleanupSection)
+			.setName('Auto-cleanup After Transcription')
+			.setDesc('Automatically delete temporary audio files (Recommended)')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.autoCleanupAfterTranscription)
+				.onChange(async (value) => {
+					this.plugin.settings.autoCleanupAfterTranscription = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(cleanupSection)
+			.setName('Keep Audio Files')
+			.setDesc('Save audio files after transcription')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.keepAudioFiles)
+				.onChange(async (value) => {
+					this.plugin.settings.keepAudioFiles = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(cleanupSection)
+			.setName('Keep Transcript Text Files')
+			.setDesc('Save transcript as separate .txt files')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.keepTranscriptFiles)
+				.onChange(async (value) => {
+					this.plugin.settings.keepTranscriptFiles = value;
+					await this.plugin.saveSettings();
+				}));
+
+		const cacheSection = this.createCollapsibleSection(container, 'Cache Management');
+
+		new Setting(cacheSection)
+			.setName('Enable Global Cache')
+			.setDesc('Cache downloaded videos for faster re-processing')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enableGlobalCache)
+				.onChange(async (value) => {
+					this.plugin.settings.enableGlobalCache = value;
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		if (this.plugin.settings.enableGlobalCache) {
+			new Setting(cacheSection)
+				.setName('Cache Size Limit (MB)')
+				.setDesc('Maximum cache size before automatic cleanup')
+				.addSlider(slider => slider
+					.setLimits(50, 1000, 50)
+					.setValue(this.plugin.settings.globalCacheMaxSizeMB)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.globalCacheMaxSizeMB = value;
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(cacheSection)
+				.setName('Auto-clear Cache After (days)')
+				.setDesc('Automatically delete cached files older than this')
+				.addSlider(slider => slider
+					.setLimits(1, 30, 1)
+					.setValue(this.plugin.settings.autoClearCacheAfterDays)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.autoClearCacheAfterDays = value;
+						await this.plugin.saveSettings();
+					}));
+		}
+	}
+
+	renderReviewTab(container: HTMLElement): void {
+		const reviewSection = this.createCollapsibleSection(container, 'Review Queue Settings');
+
+		new Setting(reviewSection)
 			.setName('Show Progress Bar')
-			.setDesc('Display a visual progress bar showing your position in the queue')
+			.setDesc('Display progress bar in review queue')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.reviewQueueShowProgressBar)
 				.onChange(async (value) => {
@@ -1911,9 +2645,9 @@ class TikTokerSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
+		new Setting(reviewSection)
 			.setName('Enable Transitions')
-			.setDesc('Add smooth animations when changing tags and states')
+			.setDesc('Add animations when changing items')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.reviewQueueEnableTransitions)
 				.onChange(async (value) => {
@@ -1921,9 +2655,9 @@ class TikTokerSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
+		new Setting(reviewSection)
 			.setName('Default Sort Mode')
-			.setDesc('Default sorting method when opening the review queue')
+			.setDesc('How to sort items by default')
 			.addDropdown(dropdown => dropdown
 				.addOption('created-desc', 'Newest First')
 				.addOption('created-asc', 'Oldest First')
@@ -1935,9 +2669,9 @@ class TikTokerSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		new Setting(containerEl)
+		new Setting(reviewSection)
 			.setName('Priority Mode')
-			.setDesc('Always show starred items first, regardless of sort order')
+			.setDesc('Always show starred items first')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.reviewQueuePriorityMode)
 				.onChange(async (value) => {
@@ -1946,6 +2680,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 				}));
 	}
 }
+
 
 class DuplicateFileModal extends Modal {
 	fileName: string;
@@ -2000,11 +2735,13 @@ class BulkProcessingModal extends Modal {
 	onSubmit: (selectedUrls: string[], enableTranscription: boolean) => void;
 	checkboxes: HTMLInputElement[] = [];
 	transcriptionCheckbox: HTMLInputElement;
+	defaultTranscription: boolean;
 
-	constructor(app: App, urls: string[], onSubmit: (selectedUrls: string[], enableTranscription: boolean) => void) {
+	constructor(app: App, urls: string[], onSubmit: (selectedUrls: string[], enableTranscription: boolean) => void, defaultTranscription: boolean = false) {
 		super(app);
 		this.urls = urls;
 		this.onSubmit = onSubmit;
+		this.defaultTranscription = defaultTranscription;
 	}
 
 	onOpen() {
@@ -2040,14 +2777,17 @@ class BulkProcessingModal extends Modal {
 			const urlText = urlItem.createSpan({text: url});
 		});
 
-		// Transcription toggle
-		const transcriptionContainer = contentEl.createDiv({cls: 'transcription-toggle'});
-		
-		const transcriptionLabel = transcriptionContainer.createEl('label');
-		
-		this.transcriptionCheckbox = transcriptionLabel.createEl('input', {type: 'checkbox'});
-		
-		const transcriptionText = transcriptionLabel.createSpan({text: 'Enable transcription for processed videos'});
+		// Transcription toggle (desktop only)
+		if (!Platform.isMobile) {
+			const transcriptionContainer = contentEl.createDiv({cls: 'transcription-toggle'});
+
+			const transcriptionLabel = transcriptionContainer.createEl('label');
+
+			this.transcriptionCheckbox = transcriptionLabel.createEl('input', {type: 'checkbox'});
+			this.transcriptionCheckbox.checked = this.defaultTranscription; // Use default from settings
+
+			const transcriptionText = transcriptionLabel.createSpan({text: 'Enable transcription for processed videos'});
+		}
 
 		// Action buttons
 		const actionContainer = contentEl.createDiv({cls: 'modal-button-container'});
@@ -2059,7 +2799,9 @@ class BulkProcessingModal extends Modal {
 				new Notice('Please select at least one URL to process');
 				return;
 			}
-			this.onSubmit(selectedUrls, this.transcriptionCheckbox.checked);
+			// On mobile, transcription is always disabled
+			const enableTranscription = Platform.isMobile ? false : this.transcriptionCheckbox.checked;
+			this.onSubmit(selectedUrls, enableTranscription);
 			this.close();
 		};
 
@@ -2087,6 +2829,7 @@ class BulkProgressModal extends Modal {
 	minimalToast: HTMLDivElement | null = null;
 	transcriptionTasks: Map<string, {status: string, startTime: number, endTime?: number}> = new Map();
 	currentTranscription: {url: string, startTime: number, interval?: any} | null = null;
+	tiktokData: Map<string, any> = new Map(); // Store TikTok data for display
 
 	constructor(app: App, total: number) {
 		super(app);
@@ -2113,19 +2856,21 @@ class BulkProgressModal extends Modal {
 		const progressText = contentEl.createEl('p', {text: `0 / ${this.total} processed`, cls: 'progress-text'});
 		progressText.id = 'progress-text';
 
-		// Transcription status section (styles handled in CSS)
-		const transcriptionSection = contentEl.createDiv({cls: 'transcription-section'});
-		transcriptionSection.createEl('h4', {text: 'Transcription Status'});
-		this.transcriptionStatusText = transcriptionSection.createEl('p', {text: 'Waiting for files to be created...'});
-		const transcriptionContainer = transcriptionSection.createDiv({cls: 'mini-progress-bar'});
-		this.transcriptionProgress = transcriptionContainer.createDiv({cls: 'mini-progress'});
+		// Transcription status section (desktop only)
+		if (!Platform.isMobile) {
+			const transcriptionSection = contentEl.createDiv({cls: 'transcription-section'});
+			transcriptionSection.createEl('h4', {text: 'Transcription Status'});
+			this.transcriptionStatusText = transcriptionSection.createEl('p', {text: 'Waiting for files to be created...'});
+			const transcriptionContainer = transcriptionSection.createDiv({cls: 'mini-progress-bar'});
+			this.transcriptionProgress = transcriptionContainer.createDiv({cls: 'mini-progress'});
 
-		// Current transcription progress section
-		const currentSection = transcriptionSection.createDiv({cls: 'current-transcription'});
-		this.currentTranscriptionText = currentSection.createEl('p', {text: 'No active transcription'});
-		this.currentTranscriptionTimer = this.currentTranscriptionText.createEl('span', {text: ''});
-		const currentContainer = currentSection.createDiv({cls: 'mini-progress-bar'});
-		this.currentTranscriptionProgress = currentContainer.createDiv({cls: 'mini-progress'});
+			// Current transcription progress section
+			const currentSection = transcriptionSection.createDiv({cls: 'current-transcription'});
+			this.currentTranscriptionText = currentSection.createEl('p', {text: ''});
+			this.currentTranscriptionTimer = this.currentTranscriptionText.createEl('span', {text: ''});
+			const currentContainer = currentSection.createDiv({cls: 'mini-progress-bar'});
+			this.currentTranscriptionProgress = currentContainer.createDiv({cls: 'mini-progress'});
+		}
 	}
 
 	updateProgress(current: number, status: string) {
@@ -2216,7 +2961,12 @@ class BulkProgressModal extends Modal {
 		}
 	}
 
-	updateTranscriptionStatus(url: string, status: 'started' | 'completed' | 'failed', timeElapsed?: number) {
+	updateTranscriptionStatus(url: string, status: 'started' | 'completed' | 'failed', timeElapsed?: number, data?: any) {
+		// Store TikTok data if provided
+		if (data && status === 'started') {
+			this.tiktokData.set(url, data);
+		}
+
 		if (status === 'started') {
 			this.transcriptionTasks.set(url, {status: 'started', startTime: Date.now()});
 			this.startCurrentTranscriptionTracking(url);
@@ -2232,18 +2982,20 @@ class BulkProgressModal extends Modal {
 		// Update overall transcription UI
 		const completed = Array.from(this.transcriptionTasks.values()).filter(t => t.status === 'completed' || t.status === 'failed').length;
 		const inProgress = Array.from(this.transcriptionTasks.values()).filter(t => t.status === 'started').length;
-		
+
 		if (this.transcriptionStatusText) {
 			if (this.transcriptionTasks.size === 0) {
 				this.transcriptionStatusText.textContent = 'Waiting for files to be created...';
 			} else if (completed === this.transcriptionTasks.size) {
 				const avgTime = this.getAverageTranscriptionTime();
 				this.transcriptionStatusText.textContent = `All transcriptions completed (avg: ${avgTime}s)`;
-				
+
 				// Close modal after all transcriptions complete with delay
 				setTimeout(() => {
 					this.close();
 				}, 2000);
+			} else if (inProgress > 0) {
+				this.transcriptionStatusText.textContent = `Transcribing ${inProgress} / Completed ${completed} of ${this.transcriptionTasks.size}`;
 			} else {
 				this.transcriptionStatusText.textContent = `Transcribed ${completed}/${this.transcriptionTasks.size} TikToks`;
 			}
@@ -2257,15 +3009,27 @@ class BulkProgressModal extends Modal {
 
 	startCurrentTranscriptionTracking(url: string) {
 		this.stopCurrentTranscriptionTracking(); // Clean up any existing
-		
-		const fileName = url.split('/').pop()?.split('?')[0] || 'TikTok';
+
+		// Get display name from TikTok data
+		const data = this.tiktokData.get(url);
+		let displayName = 'TikTok';
+
+		if (data) {
+			// Prefer description, then author
+			if (data.description && data.description.length > 0) {
+				displayName = data.description.substring(0, 50) + (data.description.length > 50 ? '...' : '');
+			} else if (data.author) {
+				displayName = `by ${data.author}`;
+			}
+		}
+
 		this.currentTranscription = {
 			url: url,
 			startTime: Date.now()
 		};
 
 		if (this.currentTranscriptionText) {
-			this.currentTranscriptionText.textContent = `Transcribing: ${fileName}`;
+			this.currentTranscriptionText.textContent = `Transcribing: ${displayName}`;
 		}
 
 		// Start real-time timer and progress animation
@@ -2296,11 +3060,11 @@ class BulkProgressModal extends Modal {
 		}
 
 		if (this.currentTranscriptionProgress) {
-			this.currentTranscriptionProgress.style.width = '100%';
+			this.currentTranscriptionProgress.style.width = '0%';
 		}
 
 		if (this.currentTranscriptionText) {
-			this.currentTranscriptionText.textContent = 'No active transcription';
+			this.currentTranscriptionText.textContent = '';
 		}
 
 		if (this.currentTranscriptionTimer) {
