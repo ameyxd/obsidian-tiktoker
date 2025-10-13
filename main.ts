@@ -1,4 +1,5 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer } from 'obsidian';
+import { TranscriptionService, TranscriptionSettings } from './transcription';
 
 const VIEW_TYPE_TIKTOK_REVIEW = 'tiktok-review-view';
 
@@ -50,7 +51,7 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	includeTagsFromHashtags: true,
 	customProperties: '',
 	transcriptionApi: 'none',
-	whisperScriptPath: '/Users/amey/Documents/projects/tiktok-test-transcription/tiktok2text.sh',
+	whisperScriptPath: '',
 	whisperModel: 'base',
 	whisperBrowser: 'chrome',
 	apiKey: '',
@@ -74,7 +75,7 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 
 export default class TikTokerPlugin extends Plugin {
 	settings: TikTokerSettings;
-	activeTranscriptionModal: SingleTranscriptionModal | null = null;
+	transcriptionService: TranscriptionService;
 
 	private debugLog(message: string, ...args: any[]): void {
 		if (this.settings.debugMode) {
@@ -84,6 +85,22 @@ export default class TikTokerPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+
+		// Initialize transcription service
+		const transcriptionSettings: TranscriptionSettings = {
+			transcriptionApi: this.settings.transcriptionApi,
+			whisperScriptPath: this.settings.whisperScriptPath,
+			whisperModel: this.settings.whisperModel,
+			whisperBrowser: this.settings.whisperBrowser,
+			enableTranscription: this.settings.enableTranscription,
+			urlTimeout: this.settings.urlTimeout,
+			debugMode: this.settings.debugMode
+		};
+		this.transcriptionService = new TranscriptionService(
+			this.app,
+			transcriptionSettings,
+			this.debugLog.bind(this)
+		);
 
 		// Register the TikTok Review view
 		this.registerView(
@@ -107,14 +124,13 @@ export default class TikTokerPlugin extends Plugin {
 			id: 'transcribe-tiktok',
 			name: 'Transcribe TikTok in current note',
 			editorCallback: (editor: Editor, view: MarkdownView) => {
-				this.transcribeTikTokInNote(editor, view);
+				this.transcriptionService.transcribeInNote(editor, view);
 			},
 			editorCheckCallback: (checking: boolean, editor: Editor, view: MarkdownView) => {
-				// Show command when there's an active markdown editor
 				if (checking) {
 					return view.getMode() === 'source' || view.getMode() === 'preview';
 				}
-				this.transcribeTikTokInNote(editor, view);
+				this.transcriptionService.transcribeInNote(editor, view);
 				return true;
 			}
 		});
@@ -1365,7 +1381,7 @@ export default class TikTokerPlugin extends Plugin {
 			if (this.settings.transcriptionApi !== 'none' && !data.isSlideshow && !data.isPrivate) {
 				if (!isBulkProcessing) {
 					// For single TikTok, show integrated modal with transcription
-					this.showSingleTranscriptionModal(data.url, data.videoId, filePath, data);
+					this.transcriptionService.showSingleTranscriptionModal(data.url, data.videoId, filePath, data);
 				}
 				// For bulk processing, transcription will be handled separately with progress tracking
 			}
@@ -1530,10 +1546,10 @@ export default class TikTokerPlugin extends Plugin {
 					
 					modal.updateTranscriptionStatus(url, 'started');
 					
-					const transcriptionTask = this.startAsyncTranscription(
-						result.data.url, 
-						result.data.videoId, 
-						result.filePath, 
+					const transcriptionTask = this.transcriptionService.startAsyncTranscription(
+						result.data.url,
+						result.data.videoId,
+						result.filePath,
 						true,
 						(status: string, timeElapsed?: number) => {
 							if (status === 'Completed') {
@@ -1671,434 +1687,10 @@ export default class TikTokerPlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 	}
 
-	async transcribeTikTokInNote(editor: Editor, view: MarkdownView) {
-		if (!this.settings.enableTranscription) {
-			new Notice('Transcription is disabled in settings');
-			return;
-		}
-
-		if (!this.settings.whisperScriptPath) {
-			new Notice('Whisper script path not configured in settings');
-			return;
-		}
-
-		const content = editor.getValue();
-		
-		// Look for TikTok URLs in the content
-		const tiktokUrlPattern = /https:\/\/(?:www\.|vm\.)?tiktok\.com\/[^\s\)]+/g;
-		const matches = content.match(tiktokUrlPattern);
-		
-		if (!matches || matches.length === 0) {
-			new Notice('No TikTok URLs found in current note');
-			return;
-		}
-
-		new Notice(`Found ${matches.length} TikTok URL(s). Processing first URL...`);
-
-		// Process only the first URL for testing
-		const url = matches[0];
-		try {
-			new Notice(`Transcribing: ${url}`);
-			
-			const transcription = await this.getLocalTranscription(url);
-			
-			// Find the URL in the content and add transcription after it
-			let updatedContent = content;
-			const urlIndex = updatedContent.indexOf(url);
-			if (urlIndex !== -1) {
-				const beforeUrl = updatedContent.substring(0, urlIndex + url.length);
-				const afterUrl = updatedContent.substring(urlIndex + url.length);
-				
-				// Check if transcription already exists
-				if (!afterUrl.startsWith('\n\n**Transcription:**')) {
-					updatedContent = beforeUrl + '\n\n**Transcription:** ' + transcription + afterUrl;
-					editor.setValue(updatedContent);
-					new Notice('Transcription added successfully');
-				} else {
-					new Notice('Transcription already exists for this URL');
-				}
-			}
-			
-		} catch (error) {
-			console.error('Transcription error:', error);
-			new Notice(`Failed to transcribe: ${error.message}`);
-		}
-	}
-
-	private async getLocalTranscription(tiktokUrl: string): Promise<string> {
-		// Desktop-only feature - not available on mobile
-		if (Platform.isMobile) {
-			throw new Error('Local transcription is not available on mobile devices');
-		}
-
-		try {
-			// Dynamic import for desktop-only Node.js modules
-			const { exec } = await import('child_process');
-			const { promisify } = await import('util');
-			const fs = await import('fs');
-			const path = await import('path');
-			
-			const execAsync = promisify(exec);
-
-			// Check if script exists
-			if (!fs.existsSync(this.settings.whisperScriptPath)) {
-				throw new Error('Whisper script not found at configured path');
-			}
-
-			new Notice('Generating transcription with local Whisper...');
-
-			// Add common Homebrew paths to PATH environment variable
-			const env = {
-				...process.env,
-				PATH: [
-					'/opt/homebrew/bin',
-					'/usr/local/bin', 
-					'/usr/bin',
-					'/bin',
-					process.env.PATH || ''
-				].filter(Boolean).join(':')
-			};
-
-			// Try script without browser authentication first, then with browser cookies
-			const scriptDir = path.dirname(this.settings.whisperScriptPath);
-			const approaches = [
-				{
-					name: 'script-no-cookies',
-					command: `cd "${scriptDir}" && bash "${this.settings.whisperScriptPath}" -m "${this.settings.whisperModel}" "${tiktokUrl}" 2>/dev/null || echo "DOWNLOAD_FAILED"`
-				},
-				{
-					name: this.settings.whisperBrowser + '-cookies',
-					command: `"${this.settings.whisperScriptPath}" -b ${this.settings.whisperBrowser} -m "${this.settings.whisperModel}" "${tiktokUrl}"`
-				}
-			];
-
-			let lastError = null;
-			
-			for (const approach of approaches) {
-				try {
-					this.debugLog(`Trying transcription approach ${approach.name}`);
-
-					const { stdout, stderr } = await execAsync(approach.command, { 
-						timeout: 120000, // 2 minutes timeout
-						maxBuffer: 1024 * 1024, // 1MB buffer for long transcriptions
-						env: env
-					});
-
-					if (stderr) {
-						this.debugLog(`Whisper stderr (${approach.name}):`, stderr);
-					}
-
-					// Check for download failure first
-					if (stdout.includes('DOWNLOAD_FAILED') || stdout.includes('Failed to fetch audio')) {
-						this.debugLog(`${approach.name} - download failed, trying next approach...`);
-						continue;
-					}
-
-					// Filter out yt-dlp progress and metadata output, keep only the transcription
-					const lines = stdout.split('\n');
-					const transcriptionLines = [];
-					
-					for (const line of lines) {
-						const trimmedLine = line.trim();
-						
-						// Skip yt-dlp download progress, metadata, and script messages
-						if (trimmedLine.startsWith('[TikTok]') || 
-							trimmedLine.startsWith('[info]') ||
-							trimmedLine.startsWith('[download]') ||
-							trimmedLine.startsWith('[ExtractAudio]') ||
-							trimmedLine.startsWith('Extracting cookies') ||
-							trimmedLine.startsWith('Extracted ') ||
-							trimmedLine.startsWith('Deleting original file') ||
-							trimmedLine.startsWith('Saved: ') ||
-							trimmedLine.includes('% of ') ||
-							trimmedLine.includes('MiB/s') ||
-							trimmedLine.includes('ETA ') ||
-							trimmedLine.includes('DOWNLOAD_FAILED')) {
-							continue;
-						}
-						
-						// If we have content that's not metadata, it should be transcription
-						if (trimmedLine.length > 0) {
-							transcriptionLines.push(trimmedLine);
-						}
-					}
-					
-					const transcription = transcriptionLines.join(' ').trim();
-					if (transcription && transcription.length > 0) {
-						this.debugLog(`Transcription successful with ${approach.name}`);
-						return transcription;
-					}
-					
-					// If no transcription but no error, continue to next approach
-					this.debugLog(`No transcription from ${approach.name}, trying next...`);
-					
-				} catch (error) {
-					this.debugLog(`Approach ${approach.name} failed:`, error.message);
-					lastError = error;
-					continue;
-				}
-			}
-
-			// If we get here, all approaches failed
-			if (lastError) {
-				throw lastError;
-			} else {
-				throw new Error('All transcription approaches failed to generate transcription');
-			}
-
-		} catch (error) {
-			console.error('TikToker: Local transcription error:', error);
-			throw new Error(`Failed to generate transcription: ${error.message}`);
-		}
-	}
-
 	async saveSettings() {
 		await this.saveData(this.settings);
 	}
 
-	private async startAsyncTranscription(url: string, videoId: string | null, filePath: string, isBulkProcessing: boolean = false, progressCallback?: (status: string, timeElapsed?: number) => void): Promise<void> {
-		const startTime = Date.now();
-		
-		try {
-			this.debugLog(`Starting async transcription for ${filePath}`);
-			
-			if (progressCallback) {
-				progressCallback('Processing audio...', 0);
-			}
-			
-			const transcription = await this.getTranscription(url, videoId, true); // Always suppress notices for cleaner UX
-			const timeElapsed = Date.now() - startTime;
-			
-			if (transcription) {
-				await this.updateFileWithTranscription(filePath, transcription, true); // Always suppress notices
-				if (progressCallback) {
-					progressCallback('Completed', timeElapsed);
-				}
-			} else {
-				if (progressCallback) {
-					progressCallback('Failed', timeElapsed);
-				}
-			}
-		} catch (error) {
-			const timeElapsed = Date.now() - startTime;
-			console.error('TikToker: Async transcription failed:', error);
-			if (progressCallback) {
-				progressCallback('Failed', timeElapsed);
-			}
-		}
-	}
-
-	private async showSingleTranscriptionModal(url: string, videoId: string | null, filePath: string, data: any): Promise<void> {
-		// Close any existing modal
-		if (this.activeTranscriptionModal) {
-			this.activeTranscriptionModal.close();
-		}
-		
-		// Extract filename without extension (mobile-compatible)
-		const fileName = filePath.split('/').pop()?.replace(/\.md$/, '') || 'TikTok';
-		this.activeTranscriptionModal = new SingleTranscriptionModal(this.app, fileName, data, this);
-		this.activeTranscriptionModal.open();
-		
-		await this.startAsyncTranscription(url, videoId, filePath, false, (status: string, timeElapsed?: number) => {
-			if (this.activeTranscriptionModal) {
-				this.activeTranscriptionModal.updateTranscriptionStatus(status, timeElapsed);
-			}
-		});
-	}
-
-	private async updateFileWithTranscription(filePath: string, transcription: string, isBulkProcessing: boolean = false): Promise<void> {
-		try {
-			const file = this.app.vault.getAbstractFileByPath(filePath);
-			if (!file || !(file instanceof TFile)) {
-				console.error('TikToker: File not found for transcription update:', filePath);
-				return;
-			}
-
-			const content = await this.app.vault.read(file);
-			const transcriptionSection = `## Transcription\n\n${transcription.trim()}`;
-			
-			this.debugLog('Original content contains placeholder:', content.includes('{{transcription}}'));
-			this.debugLog('Transcription section to insert:', transcriptionSection.substring(0, 100));
-			
-			// Replace empty transcription placeholder with actual transcription
-			const updatedContent = content.replace(/{{transcription}}/g, transcriptionSection);
-			
-			if (updatedContent === content) {
-				this.debugLog('Warning - No placeholder found to replace!');
-				this.debugLog('Content preview:', content.substring(0, 500));
-			}
-			
-			await this.app.vault.modify(file, updatedContent);
-			
-			this.debugLog(`Transcription updated for ${filePath}`);
-		} catch (error) {
-			console.error('TikToker: Failed to update file with transcription:', error);
-		}
-	}
-
-	private async getTranscription(url: string, videoId: string | null, isBulkProcessing: boolean = false): Promise<string> {
-		if (this.settings.transcriptionApi === 'none') {
-			return '';
-		}
-
-		if (this.settings.transcriptionApi === 'whisper-local') {
-			return await this.getWhisperLocalTranscription(url, videoId, isBulkProcessing);
-		}
-
-		// Add other transcription services here (assemblyai, etc.)
-		return '';
-	}
-
-	private async getWhisperLocalTranscription(url: string, videoId: string | null, isBulkProcessing: boolean = false): Promise<string> {
-		// Desktop-only feature - not available on mobile
-		if (Platform.isMobile) {
-			if (!isBulkProcessing) {
-				new Notice('Local transcription is not available on mobile devices');
-			}
-			return '';
-		}
-
-		try {
-			// Dynamic import for desktop-only Node.js modules
-			const { exec } = await import('child_process');
-			const { promisify } = await import('util');
-			const fs = await import('fs');
-			
-			const execAsync = promisify(exec);
-
-			if (!this.settings.whisperScriptPath) {
-				if (!isBulkProcessing) {
-					new Notice('Whisper script path not configured');
-				}
-				return '';
-			}
-
-			// Check if script exists
-			if (!fs.existsSync(this.settings.whisperScriptPath)) {
-				if (!isBulkProcessing) {
-					new Notice('Whisper script not found at configured path');
-				}
-				return '';
-			}
-
-			if (!isBulkProcessing) {
-				new Notice('Generating transcription...');
-			}
-
-			// Set timeout to be longer than URL timeout to allow for transcription processing
-			const transcriptionTimeout = (this.settings.urlTimeout + 60) * 1000; // Add 60 seconds
-			
-			// Add common Homebrew paths to PATH environment variable
-			const env = {
-				...process.env,
-				PATH: [
-					'/opt/homebrew/bin',
-					'/usr/local/bin', 
-					'/usr/bin',
-					'/bin',
-					process.env.PATH || ''
-				].filter(Boolean).join(':')
-			};
-
-			// Debug: Log the PATH being used
-			this.debugLog('Using PATH:', env.PATH);
-
-			// Try different browser options in order of preference (selected browser first)
-			const browsers = [this.settings.whisperBrowser, this.settings.whisperBrowser === 'chrome' ? 'safari' : 'chrome'];
-			
-			let lastError = null;
-			for (const browser of browsers) {
-				try {
-					const command = `env PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH" "${this.settings.whisperScriptPath}" -b ${browser} -m "${this.settings.whisperModel}" "${url}"`;
-					this.debugLog(`Trying transcription with ${browser}:`, command);
-
-					const { stdout, stderr } = await execAsync(command, { 
-						timeout: transcriptionTimeout,
-						maxBuffer: 1024 * 1024,
-						env: env
-					});
-
-					if (stderr) {
-						this.debugLog(`Whisper stderr (${browser}):`, stderr);
-					}
-
-					// Filter out yt-dlp progress and metadata output, keep only the transcription
-					const lines = stdout.split('\n');
-					let transcriptionStarted = false;
-					const transcriptionLines = [];
-					
-					for (const line of lines) {
-						const trimmedLine = line.trim();
-						
-						// Skip yt-dlp download progress and metadata
-						if (trimmedLine.startsWith('[TikTok]') || 
-							trimmedLine.startsWith('[info]') ||
-							trimmedLine.startsWith('[download]') ||
-							trimmedLine.startsWith('[ExtractAudio]') ||
-							trimmedLine.startsWith('Extracting cookies') ||
-							trimmedLine.startsWith('Extracted ') ||
-							trimmedLine.startsWith('Deleting original file') ||
-							trimmedLine.includes('% of ') ||
-							trimmedLine.includes('MiB/s') ||
-							trimmedLine.includes('ETA ')) {
-							continue;
-						}
-						
-						// If we have content that's not metadata, it should be transcription
-						if (trimmedLine.length > 0) {
-							transcriptionLines.push(trimmedLine);
-						}
-					}
-					
-					const transcription = transcriptionLines.join(' ').trim();
-					if (transcription) {
-						if (!isBulkProcessing) {
-							new Notice('Transcription completed');
-						}
-						this.debugLog('Transcription result:', transcription);
-						return transcription;
-					}
-					
-					// If no transcription but no error, continue to next browser
-					this.debugLog(`No transcription from ${browser}, trying next...`);
-					
-				} catch (error) {
-					this.debugLog(`Browser ${browser} failed:`, error.message);
-					lastError = error;
-					
-					// If it's a permission error specifically, try next browser
-					if (error.message && (
-						error.message.includes('Operation not permitted') ||
-						error.message.includes('binarycookies') ||
-						error.message.includes('Permission denied')
-					)) {
-						continue;
-					}
-					
-					// For other errors, also try next browser
-					continue;
-				}
-			}
-
-			// If we get here, all browsers failed
-			if (lastError) {
-				throw lastError;
-			} else {
-				throw new Error('All browser options failed to generate transcription');
-			}
-
-		} catch (error) {
-			console.error('TikToker: Transcription error:', error);
-			if (!isBulkProcessing) {
-				if (error.code === 'ETIMEDOUT') {
-					new Notice('Transcription timed out');
-				} else {
-					new Notice('Failed to generate transcription');
-				}
-			}
-			return '';
-		}
-	}
 }
 
 class TikTokerSettingTab extends PluginSettingTab {
@@ -2953,219 +2545,6 @@ class BulkResultsModal extends Modal {
 	}
 }
 
-class SingleTranscriptionModal extends Modal {
-	fileName: string;
-	data: any;
-	statusText: HTMLSpanElement;
-	timeText: HTMLSpanElement;
-	progressBar: HTMLDivElement;
-	startTime: number;
-	isMinimized: boolean = false;
-	interval: any;
-	plugin: TikTokerPlugin;
-
-	constructor(app: App, fileName: string, data: any, plugin: TikTokerPlugin) {
-		super(app);
-		this.fileName = fileName;
-		this.data = data;
-		this.startTime = Date.now();
-		this.plugin = plugin;
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.empty();
-
-		// Make modal minimizable and position in top-right corner
-		this.modalEl.style.cssText = `
-			position: fixed !important;
-			top: 20px !important;
-			right: 20px !important;
-			left: auto !important;
-			width: 320px;
-			max-width: 320px;
-			z-index: 1000;
-			transform: none !important;
-		`;
-
-		// Header with TikTok info and minimize button
-		const header = contentEl.createDiv({cls: 'transcription-modal-header'});
-		header.style.cssText = `
-			display: flex;
-			justify-content: space-between;
-			align-items: center;
-			padding: 16px;
-			border-bottom: 1px solid var(--background-modifier-border);
-		`;
-
-		const titleSection = header.createDiv();
-		titleSection.createEl('h3', {text: 'TikTok Processing', cls: 'modal-title'}).style.margin = '0 0 4px 0';
-		titleSection.createEl('div', {text: `by ${this.data.author}`, cls: 'modal-subtitle'}).style.cssText = `
-			font-size: 0.85em;
-			color: var(--text-muted);
-		`;
-
-		const minimizeBtn = header.createEl('button', {text: '−', cls: 'minimize-btn'});
-		minimizeBtn.style.cssText = `
-			background: none;
-			border: none;
-			font-size: 18px;
-			cursor: pointer;
-			color: var(--text-muted);
-			padding: 4px 8px;
-		`;
-
-		// Content section
-		const content = contentEl.createDiv({cls: 'transcription-modal-content'});
-		content.style.cssText = `padding: 16px;`;
-
-		// File creation status
-		const fileSection = content.createDiv({cls: 'file-section'});
-		fileSection.style.cssText = `margin-bottom: 20px;`;
-		
-		fileSection.createEl('div', {text: '✅ File created successfully'}).style.cssText = `
-			color: var(--text-success);
-			font-size: 0.9em;
-			margin-bottom: 4px;
-		`;
-		fileSection.createEl('div', {text: this.fileName, cls: 'file-name'}).style.cssText = `
-			font-size: 0.8em;
-			color: var(--text-muted);
-		`;
-
-		// Transcription section
-		const transcriptionSection = content.createDiv({cls: 'transcription-section'});
-		transcriptionSection.createEl('h4', {text: 'Transcription'}).style.margin = '0 0 8px 0';
-
-		const statusLine = transcriptionSection.createDiv();
-		statusLine.style.cssText = `
-			display: flex;
-			justify-content: space-between;
-			align-items: center;
-			margin-bottom: 12px;
-		`;
-
-		this.statusText = statusLine.createEl('span', {text: 'Processing audio...'});
-		this.statusText.style.cssText = `font-size: 0.9em;`;
-
-		this.timeText = statusLine.createEl('span', {text: '0.0s'});
-		this.timeText.style.cssText = `
-			font-size: 0.8em;
-			color: var(--text-muted);
-		`;
-
-		// Progress bar
-		const progressContainer = transcriptionSection.createDiv();
-		progressContainer.style.cssText = `
-			width: 100%;
-			height: 6px;
-			background-color: var(--background-modifier-border);
-			border-radius: 3px;
-			overflow: hidden;
-		`;
-
-		this.progressBar = progressContainer.createDiv();
-		this.progressBar.style.cssText = `
-			height: 100%;
-			background-color: var(--interactive-accent);
-			width: 15%;
-			transition: width 0.3s ease;
-		`;
-
-		// Minimize/expand functionality
-		minimizeBtn.onclick = () => {
-			this.toggleMinimize(content, minimizeBtn);
-		};
-
-		// Start progress animation and timer
-		this.startProgressTracking();
-	}
-
-	toggleMinimize(content: HTMLDivElement, button: HTMLButtonElement) {
-		this.isMinimized = !this.isMinimized;
-		
-		if (this.isMinimized) {
-			content.style.display = 'none';
-			button.textContent = '+';
-			this.modalEl.style.width = '200px';
-		} else {
-			content.style.display = 'block';
-			button.textContent = '−';
-			this.modalEl.style.width = '320px';
-		}
-	}
-
-	startProgressTracking() {
-		this.interval = setInterval(() => {
-			if (this.timeText) {
-				const elapsed = (Date.now() - this.startTime) / 1000;
-				this.timeText.textContent = `${elapsed.toFixed(1)}s`;
-			}
-			
-			// Animate progress bar until completion
-			if (this.progressBar && this.progressBar.style.width !== '100%') {
-				const currentWidth = parseFloat(this.progressBar.style.width) || 0;
-				if (currentWidth < 85) {
-					this.progressBar.style.width = `${Math.min(85, currentWidth + Math.random() * 8)}%`;
-				}
-			}
-		}, 1000);
-	}
-
-	updateTranscriptionStatus(status: string, timeElapsed?: number) {
-		if (this.statusText) {
-			this.statusText.textContent = status;
-		}
-
-		if (timeElapsed && this.timeText) {
-			this.timeText.textContent = `${(timeElapsed / 1000).toFixed(1)}s`;
-		}
-
-		if (this.progressBar) {
-			if (status === 'Completed') {
-				this.progressBar.style.width = '100%';
-				this.statusText.style.color = 'var(--text-success)';
-				
-				// Keep modal open but allow user to close it
-				// Auto-close after 5 seconds to give user time to see completion
-				setTimeout(() => {
-					if (this.plugin && this.plugin.activeTranscriptionModal === this) {
-						this.close();
-					}
-				}, 5000);
-			} else if (status === 'Failed') {
-				this.progressBar.style.backgroundColor = 'var(--text-error)';
-				this.statusText.style.color = 'var(--text-error)';
-				
-				// Auto-close after 8 seconds for failures
-				setTimeout(() => {
-					if (this.plugin && this.plugin.activeTranscriptionModal === this) {
-						this.close();
-					}
-				}, 8000);
-			}
-		}
-
-		// Clean up interval when done
-		if ((status === 'Completed' || status === 'Failed') && this.interval) {
-			clearInterval(this.interval);
-		}
-	}
-
-	onClose() {
-		if (this.interval) {
-			clearInterval(this.interval);
-		}
-		
-		// Clear plugin reference
-		if (this.plugin && this.plugin.activeTranscriptionModal === this) {
-			this.plugin.activeTranscriptionModal = null;
-		}
-		
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
 
 class SingleTranscriptionToast {
 	app: App;
