@@ -3,6 +3,16 @@ import { TranscriptionService, TranscriptionSettings } from './transcription';
 
 const VIEW_TYPE_TIKTOK_REVIEW = 'tiktok-review-view';
 
+interface ReviewSession {
+	id: string;
+	name: string;
+	hashtagFilter: string;
+	textFilter: string;
+	reviewedFiles: string[];
+	created: string;
+	lastAccessed: string;
+}
+
 interface TikTokerSettings {
 	outputFolder: string;
 	fileNamingPattern: string;
@@ -49,6 +59,15 @@ interface TikTokerSettings {
 	reviewQueueEnableTransitions: boolean;
 	reviewQueueDefaultSort: 'created-desc' | 'created-asc' | 'author' | 'hashtags';
 	reviewQueuePriorityMode: boolean;
+	reviewQueueButtonLayout: 'sticky-footer' | 'scroll-container' | 'floating-bar';
+	reviewQueueAutoPinSidebar: boolean;
+	reviewQueueEnableDataview: boolean;
+	reviewQueueDataviewTemplate: string;
+	reviewQueueEnableSessionManagement: boolean;
+	reviewQueueSessionCleanupDays: number;
+	// Session Management
+	reviewSessions: ReviewSession[];
+	activeSessionId: string | null;
 }
 
 const DEFAULT_SETTINGS: TikTokerSettings = {
@@ -96,7 +115,16 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	reviewQueueShowProgressBar: true,
 	reviewQueueEnableTransitions: true,
 	reviewQueueDefaultSort: 'created-desc',
-	reviewQueuePriorityMode: false
+	reviewQueuePriorityMode: false,
+	reviewQueueButtonLayout: 'sticky-footer',
+	reviewQueueAutoPinSidebar: true,
+	reviewQueueEnableDataview: true,
+	reviewQueueDataviewTemplate: 'LIST',
+	reviewQueueEnableSessionManagement: true,
+	reviewQueueSessionCleanupDays: 30,
+	// Session Management
+	reviewSessions: [],
+	activeSessionId: null
 }
 
 export default class TikTokerPlugin extends Plugin {
@@ -205,7 +233,7 @@ export default class TikTokerPlugin extends Plugin {
 			// If view already exists, reveal it
 			leaf = leaves[0];
 		} else {
-			// Create new leaf in right sidebar
+			// Create new leaf in right sidebar (false = don't split, reuse existing leaf)
 			const rightLeaf = workspace.getRightLeaf(false);
 			if (rightLeaf) {
 				await rightLeaf.setViewState({
@@ -213,6 +241,11 @@ export default class TikTokerPlugin extends Plugin {
 					active: true,
 				});
 				leaf = rightLeaf;
+
+				// Pin the leaf if auto-pin is enabled
+				if (this.settings.reviewQueueAutoPinSidebar) {
+					leaf.setPinned(true);
+				}
 			}
 		}
 
@@ -2678,6 +2711,93 @@ class TikTokerSettingTab extends PluginSettingTab {
 					this.plugin.settings.reviewQueuePriorityMode = value;
 					await this.plugin.saveSettings();
 				}));
+
+		// Session Management Section
+		const sessionSection = this.createCollapsibleSection(container, 'Session Management');
+
+		new Setting(sessionSection)
+			.setName('Enable Session Management')
+			.setDesc('Track and manage review sessions')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.reviewQueueEnableSessionManagement)
+				.onChange(async (value) => {
+					this.plugin.settings.reviewQueueEnableSessionManagement = value;
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		if (this.plugin.settings.reviewQueueEnableSessionManagement) {
+			new Setting(sessionSection)
+				.setName('Session Cleanup Days')
+				.setDesc('Delete session data older than this')
+				.addSlider(slider => slider
+					.setLimits(1, 90, 1)
+					.setValue(this.plugin.settings.reviewQueueSessionCleanupDays)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						this.plugin.settings.reviewQueueSessionCleanupDays = value;
+						await this.plugin.saveSettings();
+					}));
+		}
+
+		// Dataview Integration Section
+		const dataviewSection = this.createCollapsibleSection(container, 'Dataview Integration');
+
+		new Setting(dataviewSection)
+			.setName('Enable Dataview Insertion')
+			.setDesc('Insert Dataview queries into created notes')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.reviewQueueEnableDataview)
+				.onChange(async (value) => {
+					this.plugin.settings.reviewQueueEnableDataview = value;
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		if (this.plugin.settings.reviewQueueEnableDataview) {
+			new Setting(dataviewSection)
+				.setName('Dataview Template')
+				.setDesc('Template for Dataview query insertion')
+				.addText(text => text
+					.setPlaceholder('LIST')
+					.setValue(this.plugin.settings.reviewQueueDataviewTemplate)
+					.onChange(async (value) => {
+						this.plugin.settings.reviewQueueDataviewTemplate = value;
+						await this.plugin.saveSettings();
+					}));
+		}
+
+		// View Settings Section
+		const viewSection = this.createCollapsibleSection(container, 'View Settings');
+
+		new Setting(viewSection)
+			.setName('Auto-pin to Sidebar')
+			.setDesc('Automatically pin review queue to sidebar')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.reviewQueueAutoPinSidebar)
+				.onChange(async (value) => {
+					this.plugin.settings.reviewQueueAutoPinSidebar = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(viewSection)
+			.setName('Button Layout')
+			.setDesc('Choose how action buttons are positioned')
+			.addDropdown(dropdown => dropdown
+				.addOption('sticky-footer', 'Sticky Footer (Recommended)')
+				.addOption('scroll-container', 'Scroll Container')
+				.addOption('floating-bar', 'Floating Action Bar')
+				.setValue(this.plugin.settings.reviewQueueButtonLayout)
+				.onChange(async (value: any) => {
+					this.plugin.settings.reviewQueueButtonLayout = value;
+					await this.plugin.saveSettings();
+					// Update the layout in the active review view if it exists
+					const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_TIKTOK_REVIEW);
+					if (leaves.length > 0) {
+						const view = leaves[0].view as TikTokReviewView;
+						view.updateButtonLayout();
+					}
+				}));
 	}
 }
 
@@ -3511,6 +3631,11 @@ class TikTokReviewView extends ItemView {
 	showNoteContent: boolean = false;
 	editableContent: boolean = false;
 
+	// Session filters
+	hashtagFilter: string = '';
+	textFilter: string = '';
+	activeSession: ReviewSession | null = null;
+
 	// Undo state
 	undoState: {
 		file: TFile;
@@ -3533,6 +3658,10 @@ class TikTokReviewView extends ItemView {
 	starButton: HTMLButtonElement;
 	quickNotesTextarea: HTMLTextAreaElement;
 	addNoteButton: HTMLButtonElement;
+	sessionDropdown: HTMLSelectElement;
+	hashtagFilterInput: HTMLInputElement;
+	textFilterInput: HTMLInputElement;
+	sessionInfoDiv: HTMLElement;
 
 	constructor(leaf: WorkspaceLeaf, plugin: TikTokerPlugin) {
 		super(leaf);
@@ -3562,6 +3691,12 @@ class TikTokReviewView extends ItemView {
 		// Create main container
 		this.containerDiv = container.createDiv({ cls: 'tiktok-review-content' });
 
+		// Apply layout class based on settings
+		const layoutClass = this.plugin.settings.reviewQueueButtonLayout === 'sticky-footer' ? 'tiktok-review-layout-sticky' :
+		                    this.plugin.settings.reviewQueueButtonLayout === 'scroll-container' ? 'tiktok-review-layout-scroll' :
+		                    'tiktok-review-layout-floating';
+		this.containerDiv.addClass(layoutClass);
+
 		// Header
 		const header = this.containerDiv.createEl('h4', {
 			text: 'TikTok Review Queue',
@@ -3573,6 +3708,64 @@ class TikTokReviewView extends ItemView {
 			this.progressBarDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-progress-bar' });
 			const progressFill = this.progressBarDiv.createDiv({ cls: 'tiktok-review-progress-fill' });
 		}
+
+		// Session Management UI
+		const sessionDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-session-container' });
+
+		// Session dropdown and controls
+		const sessionControlsDiv = sessionDiv.createDiv({ cls: 'tiktok-review-session-controls' });
+		sessionControlsDiv.createEl('span', { text: 'Session: ', cls: 'tiktok-review-session-label' });
+
+		this.sessionDropdown = sessionControlsDiv.createEl('select', { cls: 'dropdown' });
+		this.updateSessionDropdown();
+		this.sessionDropdown.addEventListener('change', async () => {
+			await this.switchSession(this.sessionDropdown.value);
+		});
+
+		const manageSessionBtn = sessionControlsDiv.createEl('button', { text: '⚙️', cls: 'tiktok-review-manage-btn' });
+		manageSessionBtn.title = 'Manage Sessions';
+		manageSessionBtn.addEventListener('click', () => this.openSessionManagementModal());
+
+		if (this.plugin.settings.reviewQueueEnableDataview) {
+			const dataviewBtn = sessionControlsDiv.createEl('button', { text: '📋', cls: 'tiktok-review-manage-btn' });
+			dataviewBtn.title = 'Insert Dataview to Current Note';
+			dataviewBtn.addEventListener('click', () => this.insertDataviewToCurrentNote());
+		}
+
+		// Session info display
+		this.sessionInfoDiv = sessionDiv.createDiv({ cls: 'tiktok-review-session-info' });
+
+		// Filter inputs
+		const filtersInputDiv = sessionDiv.createDiv({ cls: 'tiktok-review-filter-inputs' });
+
+		const hashtagGroup = filtersInputDiv.createDiv({ cls: 'tiktok-review-filter-group' });
+		hashtagGroup.createEl('label', { text: 'Hashtag:', cls: 'tiktok-review-filter-input-label' });
+		this.hashtagFilterInput = hashtagGroup.createEl('input', {
+			type: 'text',
+			placeholder: 'e.g., manifest',
+			cls: 'tiktok-review-filter-input'
+		});
+		this.hashtagFilterInput.addEventListener('input', () => this.onFilterChange());
+
+		const textGroup = filtersInputDiv.createDiv({ cls: 'tiktok-review-filter-group' });
+		textGroup.createEl('label', { text: 'Text:', cls: 'tiktok-review-filter-input-label' });
+		this.textFilterInput = textGroup.createEl('input', {
+			type: 'text',
+			placeholder: 'e.g., history',
+			cls: 'tiktok-review-filter-input'
+		});
+		this.textFilterInput.addEventListener('input', () => this.onFilterChange());
+
+		const filterButtonsDiv = filtersInputDiv.createDiv({ cls: 'tiktok-review-filter-buttons' });
+
+		const saveSessionBtn = filterButtonsDiv.createEl('button', { text: 'Save Session', cls: 'mod-cta' });
+		saveSessionBtn.addEventListener('click', () => this.saveCurrentSession());
+
+		const clearFiltersBtn = filterButtonsDiv.createEl('button', { text: 'Clear Filters' });
+		clearFiltersBtn.addEventListener('click', () => this.clearFilters());
+
+		const resetSessionBtn = filterButtonsDiv.createEl('button', { text: 'Reset Session' });
+		resetSessionBtn.addEventListener('click', () => this.resetCurrentSession());
 
 		// Combined Filter checkboxes and Sort controls
 		const filterDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-filter' });
@@ -3620,17 +3813,21 @@ class TikTokReviewView extends ItemView {
 			await this.renderCurrentTikTok();
 		});
 
+		// Wrap scrollable content if using scroll-container layout
+		const scrollableWrapper = this.plugin.settings.reviewQueueButtonLayout === 'scroll-container' ?
+			this.containerDiv.createDiv({ cls: 'tiktok-review-scrollable' }) : this.containerDiv;
+
 		// Metadata (title, author, date) - BEFORE embed
-		this.metadataDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-metadata' });
+		this.metadataDiv = scrollableWrapper.createDiv({ cls: 'tiktok-review-metadata' });
 
 		// Embed container - AFTER metadata
-		this.embedDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-embed' });
+		this.embedDiv = scrollableWrapper.createDiv({ cls: 'tiktok-review-embed' });
 
 		// Hashtags section
-		this.hashtagsDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-hashtags' });
+		this.hashtagsDiv = scrollableWrapper.createDiv({ cls: 'tiktok-review-hashtags' });
 
 		// Note content toggle, edit toggle, and open button container
-		const noteButtonsDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-note-buttons' });
+		const noteButtonsDiv = scrollableWrapper.createDiv({ cls: 'tiktok-review-note-buttons' });
 		const toggleButton = noteButtonsDiv.createEl('button', {
 			text: '▼ Show Note Content',
 			cls: 'mod-cta'
@@ -3660,11 +3857,11 @@ class TikTokReviewView extends ItemView {
 		});
 
 		// Note content (collapsible)
-		this.noteContentDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-note-content' });
+		this.noteContentDiv = scrollableWrapper.createDiv({ cls: 'tiktok-review-note-content' });
 		this.noteContentDiv.style.display = 'none';
 
 		// Quick Notes section
-		this.quickNotesDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-quick-notes' });
+		this.quickNotesDiv = scrollableWrapper.createDiv({ cls: 'tiktok-review-quick-notes' });
 		this.quickNotesDiv.createEl('label', { text: 'Quick Note:', cls: 'tiktok-review-quick-notes-label' });
 		this.quickNotesTextarea = this.quickNotesDiv.createEl('textarea', {
 			cls: 'tiktok-review-quick-notes-textarea',
@@ -3679,16 +3876,19 @@ class TikTokReviewView extends ItemView {
 		// Queue counter
 		this.queueCounterDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-counter' });
 
+		// Controls wrapper
+		const controlsWrapper = this.containerDiv.createDiv({ cls: 'tiktok-review-controls-wrapper' });
+
 		// Navigation controls section
-		const navLabel = this.containerDiv.createEl('div', { text: 'Navigation:', cls: 'tiktok-review-section-label' });
-		this.navControlsDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-nav-controls' });
+		const navLabel = controlsWrapper.createEl('div', { text: 'Navigation:', cls: 'tiktok-review-section-label' });
+		this.navControlsDiv = controlsWrapper.createDiv({ cls: 'tiktok-review-nav-controls' });
 
 		// Status controls section
-		const statusLabel = this.containerDiv.createEl('div', { text: 'Status:', cls: 'tiktok-review-section-label' });
-		this.statusControlsDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-status-controls' });
+		const statusLabel = controlsWrapper.createEl('div', { text: 'Status:', cls: 'tiktok-review-section-label' });
+		this.statusControlsDiv = controlsWrapper.createDiv({ cls: 'tiktok-review-status-controls' });
 
 		// Undo button
-		this.undoButtonDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-undo-container' });
+		this.undoButtonDiv = controlsWrapper.createDiv({ cls: 'tiktok-review-undo-container' });
 
 		this.createControls();
 
@@ -3725,6 +3925,75 @@ class TikTokReviewView extends ItemView {
 				height: 100%;
 				background: var(--interactive-accent);
 				transition: width 0.3s ease;
+			}
+			.tiktok-review-session-container {
+				margin-bottom: 16px;
+				padding: 12px;
+				background: var(--background-secondary);
+				border-radius: 4px;
+				border: 1px solid var(--background-modifier-border);
+			}
+			.tiktok-review-session-controls {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				margin-bottom: 12px;
+			}
+			.tiktok-review-session-label {
+				font-weight: 600;
+				font-size: 0.9em;
+			}
+			.tiktok-review-session-controls select {
+				flex: 1;
+				max-width: 250px;
+			}
+			.tiktok-review-manage-btn {
+				padding: 4px 8px;
+				font-size: 1.1em;
+			}
+			.tiktok-review-session-info {
+				margin-bottom: 12px;
+				font-size: 0.85em;
+				color: var(--text-muted);
+			}
+			.tiktok-review-session-stats {
+				font-weight: 500;
+			}
+			.tiktok-review-filter-inputs {
+				display: flex;
+				flex-direction: row;
+				gap: 12px;
+				flex-wrap: wrap;
+			}
+			.tiktok-review-filter-group {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				flex: 1;
+				min-width: 200px;
+			}
+			.tiktok-review-filter-input-label {
+				font-weight: 600;
+				font-size: 0.85em;
+				min-width: 65px;
+			}
+			.tiktok-review-filter-input {
+				flex: 1;
+				padding: 4px 8px;
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 4px;
+				background: var(--background-primary);
+				font-size: 0.9em;
+			}
+			.tiktok-review-filter-buttons {
+				display: flex;
+				gap: 6px;
+				margin-top: 8px;
+			}
+			.tiktok-review-filter-buttons button {
+				flex: 1;
+				padding: 6px 12px;
+				font-size: 0.85em;
 			}
 			.tiktok-review-filter {
 				margin-bottom: 12px;
@@ -3845,6 +4114,7 @@ class TikTokReviewView extends ItemView {
 				display: flex;
 				gap: 8px;
 				margin-bottom: 12px;
+				padding: 0 4px;
 			}
 			.tiktok-review-nav-controls button {
 				flex: 1;
@@ -3855,6 +4125,7 @@ class TikTokReviewView extends ItemView {
 				grid-template-columns: 1fr 1fr;
 				gap: 8px;
 				margin-bottom: 12px;
+				padding: 0 4px;
 			}
 			.tiktok-review-status-controls button {
 				padding: 8px;
@@ -3921,6 +4192,51 @@ class TikTokReviewView extends ItemView {
 				padding: 40px 20px;
 				color: var(--text-muted);
 			}
+
+			/* Layout Option A: Sticky Footer */
+			.tiktok-review-layout-sticky .tiktok-review-controls-wrapper {
+				position: sticky;
+				bottom: 0;
+				background: var(--background-primary);
+				padding: 12px 0 0 0;
+				border-top: 2px solid var(--background-modifier-border);
+				z-index: 10;
+				box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
+			}
+
+			/* Layout Option B: Scroll Container */
+			.tiktok-review-layout-scroll .tiktok-review-scrollable {
+				max-height: calc(100vh - 400px);
+				overflow-y: auto;
+				margin-bottom: 12px;
+				padding-right: 8px;
+			}
+			.tiktok-review-layout-scroll .tiktok-review-controls-wrapper {
+				padding-top: 12px;
+				border-top: 2px solid var(--background-modifier-border);
+			}
+
+			/* Layout Option C: Floating Action Bar */
+			.tiktok-review-layout-floating .tiktok-review-controls-wrapper {
+				position: fixed;
+				bottom: 20px;
+				right: 20px;
+				left: auto;
+				width: 280px;
+				background: var(--background-primary);
+				padding: 12px;
+				border: 2px solid var(--interactive-accent);
+				border-radius: 8px;
+				box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+				z-index: 100;
+			}
+			.tiktok-review-layout-floating .tiktok-review-controls-wrapper:hover {
+				box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+			}
+			.tiktok-review-layout-floating .tiktok-review-nav-controls,
+			.tiktok-review-layout-floating .tiktok-review-status-controls {
+				margin-bottom: 8px;
+			}
 		`;
 		document.head.appendChild(style);
 	}
@@ -3969,6 +4285,21 @@ class TikTokReviewView extends ItemView {
 		if (progressFill) {
 			progressFill.style.width = `${percentage}%`;
 		}
+	}
+
+	updateButtonLayout() {
+		if (!this.containerDiv) return;
+
+		// Remove all existing layout classes
+		this.containerDiv.removeClass('tiktok-review-layout-sticky');
+		this.containerDiv.removeClass('tiktok-review-layout-scroll');
+		this.containerDiv.removeClass('tiktok-review-layout-floating');
+
+		// Apply the new layout class based on current settings
+		const layoutClass = this.plugin.settings.reviewQueueButtonLayout === 'sticky-footer' ? 'tiktok-review-layout-sticky' :
+		                    this.plugin.settings.reviewQueueButtonLayout === 'scroll-container' ? 'tiktok-review-layout-scroll' :
+		                    'tiktok-review-layout-floating';
+		this.containerDiv.addClass(layoutClass);
 	}
 
 	updateQueueCounter() {
@@ -4056,6 +4387,29 @@ class TikTokReviewView extends ItemView {
 
 			if (matchesStatus) {
 				this.queue.push(file);
+			}
+		}
+
+		// Apply content/hashtag filters if active
+		if (this.hashtagFilter || this.textFilter) {
+			// Filter asynchronously since matchesContentFilter is now async
+			const filterResults = await Promise.all(
+				this.queue.map(async (file) => ({
+					file,
+					matches: await this.matchesContentFilter(file)
+				}))
+			);
+			this.queue = filterResults.filter(result => result.matches).map(result => result.file);
+
+			// Sort by reviewed status within filtered results (unreviewed first)
+			if (this.activeSession) {
+				this.queue.sort((a, b) => {
+					const aReviewed = this.activeSession!.reviewedFiles.includes(a.path);
+					const bReviewed = this.activeSession!.reviewedFiles.includes(b.path);
+					if (aReviewed && !bReviewed) return 1;  // b comes first (unreviewed)
+					if (!aReviewed && bReviewed) return -1; // a comes first (unreviewed)
+					return 0;
+				});
 			}
 		}
 
@@ -4435,6 +4789,14 @@ class TikTokReviewView extends ItemView {
 			}
 		});
 
+		// Track reviewed file in active session
+		if (this.activeSession && !this.activeSession.reviewedFiles.includes(currentFile.path)) {
+			this.activeSession.reviewedFiles.push(currentFile.path);
+			this.activeSession.lastAccessed = new Date().toISOString();
+			await this.plugin.saveSettings();
+			this.updateSessionInfo();
+		}
+
 		// Enable undo button
 		this.undoButton.disabled = false;
 	}
@@ -4479,7 +4841,655 @@ class TikTokReviewView extends ItemView {
 		this.undoButton.disabled = true;
 	}
 
+	async matchesContentFilter(file: TFile): Promise<boolean> {
+		const cache = this.app.metadataCache.getFileCache(file);
+
+		// Prepare regex patterns (case-insensitive)
+		let hashtagPattern: RegExp | null = null;
+		let textPattern: RegExp | null = null;
+
+		try {
+			if (this.hashtagFilter) {
+				// Escape special regex characters but allow user to use regex if they want
+				const hashtagEscaped = this.hashtagFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+				hashtagPattern = new RegExp(hashtagEscaped, 'i');
+			}
+			if (this.textFilter) {
+				const textEscaped = this.textFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+				textPattern = new RegExp(textEscaped, 'i');
+			}
+		} catch (e) {
+			// Invalid regex, return false
+			return false;
+		}
+
+		// Read file content once for both filters
+		let fileContent = '';
+		let descriptionText = '';
+		let transcriptionText = '';
+
+		try {
+			fileContent = await this.app.vault.cachedRead(file);
+
+			// Extract Description and Transcription sections
+			const descMatch = fileContent.match(/## Description\s*([\s\S]*?)(?=##|$)/);
+			const transMatch = fileContent.match(/## Transcription\s*([\s\S]*?)(?=##|$)/);
+
+			descriptionText = descMatch ? descMatch[1].trim() : '';
+			transcriptionText = transMatch ? transMatch[1].trim() : '';
+		} catch (e) {
+			// If we can't read the file, handle gracefully
+			console.error(`Error reading file ${file.path}:`, e);
+			return false;
+		}
+
+		const contentSearchText = `${descriptionText} ${transcriptionText}`;
+
+		// Check hashtag filter (searches in frontmatter tags AND Description/Transcription sections)
+		if (hashtagPattern) {
+			let hashtagMatch = false;
+
+			// Check frontmatter tags
+			const tags = cache?.frontmatter?.tags || [];
+			const tagArray = Array.isArray(tags) ? tags : [tags];
+			for (const tag of tagArray) {
+				const cleanTag = tag.toString().replace('#', '');
+				if (hashtagPattern.test(cleanTag)) {
+					hashtagMatch = true;
+					break;
+				}
+			}
+
+			// If not found in tags, check in Description/Transcription sections
+			if (!hashtagMatch && hashtagPattern.test(contentSearchText)) {
+				hashtagMatch = true;
+			}
+
+			if (!hashtagMatch) return false;
+		}
+
+		// Check text filter (searches ONLY in Description/Transcription sections)
+		if (textPattern) {
+			if (!textPattern.test(contentSearchText)) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	// Session Management Methods
+
+	updateSessionDropdown() {
+		if (!this.sessionDropdown) return;
+
+		this.sessionDropdown.empty();
+
+		// Add "No Session" option
+		const noSessionOpt = this.sessionDropdown.createEl('option', {
+			text: 'No Session (Temporary Filter)',
+			value: ''
+		});
+
+		// Add existing sessions
+		for (const session of this.plugin.settings.reviewSessions) {
+			const reviewedCount = session.reviewedFiles.length;
+			const opt = this.sessionDropdown.createEl('option', {
+				text: `${session.name} (${reviewedCount} reviewed)`,
+				value: session.id
+			});
+		}
+
+		// Add "New Session..." option
+		const newSessionOpt = this.sessionDropdown.createEl('option', {
+			text: '+ New Session...',
+			value: '__new__'
+		});
+
+		// Set current value
+		if (this.activeSession) {
+			this.sessionDropdown.value = this.activeSession.id;
+		} else {
+			this.sessionDropdown.value = this.plugin.settings.activeSessionId || '';
+		}
+
+		this.updateSessionInfo();
+	}
+
+	updateSessionInfo() {
+		if (!this.sessionInfoDiv) return;
+
+		this.sessionInfoDiv.empty();
+
+		if (this.activeSession) {
+			const reviewed = this.activeSession.reviewedFiles.length;
+			const total = this.queue.length;
+			const unreviewed = total - this.activeSession.reviewedFiles.filter(f =>
+				this.queue.some(qf => qf.path === f)
+			).length;
+
+			this.sessionInfoDiv.createEl('span', {
+				text: `Active: ${this.activeSession.name} | ${reviewed} reviewed`,
+				cls: 'tiktok-review-session-stats'
+			});
+		} else if (this.hashtagFilter || this.textFilter) {
+			this.sessionInfoDiv.createEl('span', {
+				text: 'Temporary filter active (not saved)',
+				cls: 'tiktok-review-session-stats'
+			});
+		}
+	}
+
+	async switchSession(sessionId: string) {
+		if (sessionId === '__new__') {
+			// Create new session
+			await this.createNewSession();
+			return;
+		}
+
+		if (sessionId === '') {
+			// No session mode
+			this.activeSession = null;
+			this.plugin.settings.activeSessionId = null;
+			await this.plugin.saveSettings();
+			this.updateSessionInfo();
+			return;
+		}
+
+		// Load existing session
+		const session = this.plugin.settings.reviewSessions.find(s => s.id === sessionId);
+		if (session) {
+			this.activeSession = session;
+			this.hashtagFilter = session.hashtagFilter;
+			this.textFilter = session.textFilter;
+			this.hashtagFilterInput.value = session.hashtagFilter;
+			this.textFilterInput.value = session.textFilter;
+
+			// Update last accessed
+			session.lastAccessed = new Date().toISOString();
+
+			this.plugin.settings.activeSessionId = sessionId;
+			await this.plugin.saveSettings();
+
+			await this.loadQueue();
+			await this.renderCurrentTikTok();
+			this.updateSessionInfo();
+		}
+	}
+
+	async createNewSession() {
+		const modal = new SessionNameModal(this.app, '', async (name) => {
+			if (!name.trim()) {
+				new Notice('Session name cannot be empty');
+				return;
+			}
+
+			const newSession: ReviewSession = {
+				id: this.generateSessionId(),
+				name: name.trim(),
+				hashtagFilter: this.hashtagFilter,
+				textFilter: this.textFilter,
+				reviewedFiles: [],
+				created: new Date().toISOString(),
+				lastAccessed: new Date().toISOString()
+			};
+
+			this.plugin.settings.reviewSessions.push(newSession);
+			this.activeSession = newSession;
+			this.plugin.settings.activeSessionId = newSession.id;
+			await this.plugin.saveSettings();
+
+			this.updateSessionDropdown();
+			new Notice(`Session "${name}" created`);
+		});
+		modal.open();
+	}
+
+	async saveCurrentSession() {
+		if (this.activeSession) {
+			// Update existing session
+			this.activeSession.hashtagFilter = this.hashtagFilter;
+			this.activeSession.textFilter = this.textFilter;
+			this.activeSession.lastAccessed = new Date().toISOString();
+			await this.plugin.saveSettings();
+			this.updateSessionDropdown();
+			new Notice('Session updated');
+		} else {
+			// Create new session
+			await this.createNewSession();
+		}
+	}
+
+	async clearFilters() {
+		this.hashtagFilter = '';
+		this.textFilter = '';
+		this.hashtagFilterInput.value = '';
+		this.textFilterInput.value = '';
+
+		if (this.activeSession) {
+			this.activeSession.hashtagFilter = '';
+			this.activeSession.textFilter = '';
+			await this.plugin.saveSettings();
+		}
+
+		await this.loadQueue();
+		await this.renderCurrentTikTok();
+		this.updateSessionInfo();
+	}
+
+	async resetCurrentSession() {
+		if (!this.activeSession) {
+			new Notice('No active session to reset');
+			return;
+		}
+
+		const confirmed = await this.confirmAction(
+			`Reset session "${this.activeSession.name}"? This will clear all reviewed files from this session.`
+		);
+
+		if (confirmed) {
+			this.activeSession.reviewedFiles = [];
+			this.activeSession.lastAccessed = new Date().toISOString();
+			await this.plugin.saveSettings();
+			await this.loadQueue();
+			await this.renderCurrentTikTok();
+			this.updateSessionDropdown();
+			new Notice('Session reset');
+		}
+	}
+
+	async onFilterChange() {
+		// Debounce filter changes
+		if ((this as any).filterTimeout) {
+			clearTimeout((this as any).filterTimeout);
+		}
+
+		(this as any).filterTimeout = setTimeout(async () => {
+			this.hashtagFilter = this.hashtagFilterInput.value.trim();
+			this.textFilter = this.textFilterInput.value.trim();
+
+			if (this.activeSession) {
+				this.activeSession.hashtagFilter = this.hashtagFilter;
+				this.activeSession.textFilter = this.textFilter;
+				await this.plugin.saveSettings();
+			}
+
+			await this.loadQueue();
+			await this.renderCurrentTikTok();
+			this.updateSessionInfo();
+		}, 300);
+	}
+
+	openSessionManagementModal() {
+		const modal = new SessionManagementModal(this.app, this.plugin, this);
+		modal.open();
+	}
+
+	async insertDataviewToCurrentNote() {
+		// Get active file
+		const activeFile = this.app.workspace.getActiveFile();
+		if (!activeFile) {
+			new Notice('No active note to insert dataview');
+			return;
+		}
+
+		// Build dataview query based on active filters
+		const outputFolder = this.plugin.settings.outputFolder || 'TikToks';
+		let whereClause = '';
+		let titleText = '';
+
+		if (this.hashtagFilter && this.textFilter) {
+			// Both filters active
+			whereClause = `WHERE contains(file.tags, "#${this.hashtagFilter}")`;
+			titleText = `#${this.hashtagFilter} & text:"${this.textFilter}"`;
+		} else if (this.hashtagFilter) {
+			// Only hashtag filter
+			whereClause = `WHERE contains(file.tags, "#${this.hashtagFilter}")`;
+			titleText = `#${this.hashtagFilter}`;
+		} else if (this.textFilter) {
+			// Only text filter
+			whereClause = `WHERE contains(file.name, "${this.textFilter}") OR contains(file.text, "${this.textFilter}")`;
+			titleText = `text:"${this.textFilter}"`;
+		} else {
+			// No filters
+			new Notice('No active filters to create dataview query');
+			return;
+		}
+
+		const dataviewQuery = `\`\`\`dataview
+${this.plugin.settings.reviewQueueDataviewTemplate}
+FROM "${outputFolder}"
+${whereClause}
+\`\`\``;
+
+		const heading = `## Linked TikToks: ${titleText}`;
+		const contentToInsert = `\n\n${heading}\n\n${dataviewQuery}\n`;
+
+		try {
+			// Read current content
+			let content = await this.app.vault.read(activeFile);
+
+			// Append to end
+			content += contentToInsert;
+
+			// Write back
+			await this.app.vault.modify(activeFile, content);
+
+			new Notice(`Dataview query added to ${activeFile.basename}`);
+		} catch (error) {
+			console.error('Failed to insert dataview:', error);
+			new Notice('Failed to insert dataview query');
+		}
+	}
+
+	generateSessionId(): string {
+		return 'session-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9);
+	}
+
+	async confirmAction(message: string): Promise<boolean> {
+		return new Promise((resolve) => {
+			const modal = new Modal(this.app);
+			modal.contentEl.createEl('p', { text: message });
+
+			const buttonDiv = modal.contentEl.createDiv({ cls: 'modal-button-container' });
+			buttonDiv.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;';
+
+			const cancelBtn = buttonDiv.createEl('button', { text: 'Cancel' });
+			cancelBtn.addEventListener('click', () => {
+				modal.close();
+				resolve(false);
+			});
+
+			const confirmBtn = buttonDiv.createEl('button', { text: 'Confirm', cls: 'mod-warning' });
+			confirmBtn.addEventListener('click', () => {
+				modal.close();
+				resolve(true);
+			});
+
+			modal.open();
+		});
+	}
+
 	async onClose() {
 		// Cleanup
+	}
+}
+
+// SessionNameModal - Modal for entering/editing session names
+class SessionNameModal extends Modal {
+	initialName: string;
+	onSubmit: (name: string) => void;
+	nameInput: HTMLInputElement;
+
+	constructor(app: App, initialName: string, onSubmit: (name: string) => void) {
+		super(app);
+		this.initialName = initialName;
+		this.onSubmit = onSubmit;
+	}
+
+	onOpen() {
+		const {contentEl} = this;
+		contentEl.empty();
+
+		contentEl.createEl('h2', {text: this.initialName ? 'Rename Session' : 'New Session Name'});
+
+		const inputContainer = contentEl.createDiv({cls: 'session-name-input-container'});
+		inputContainer.style.cssText = 'margin: 20px 0;';
+
+		const label = inputContainer.createEl('label', {text: 'Session Name:'});
+		label.style.cssText = 'display: block; margin-bottom: 8px; font-weight: 500;';
+
+		this.nameInput = inputContainer.createEl('input', {
+			type: 'text',
+			placeholder: 'Enter session name...',
+			value: this.initialName
+		});
+		this.nameInput.style.cssText = 'width: 100%; padding: 8px; border: 1px solid var(--background-modifier-border); border-radius: 4px; background-color: var(--background-primary);';
+
+		// Focus and select all text on open
+		setTimeout(() => {
+			this.nameInput.focus();
+			this.nameInput.select();
+		}, 10);
+
+		// Handle Enter key
+		this.nameInput.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				this.handleSubmit();
+			}
+		});
+
+		const buttonContainer = contentEl.createDiv({cls: 'modal-button-container'});
+		buttonContainer.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end; gap: 8px;';
+
+		const cancelButton = buttonContainer.createEl('button', {text: 'Cancel'});
+		cancelButton.onclick = () => this.close();
+
+		const saveButton = buttonContainer.createEl('button', {text: 'Save', cls: 'mod-cta'});
+		saveButton.onclick = () => this.handleSubmit();
+	}
+
+	handleSubmit() {
+		const name = this.nameInput.value.trim();
+		if (name) {
+			this.onSubmit(name);
+			this.close();
+		} else {
+			new Notice('Please enter a session name');
+			this.nameInput.focus();
+		}
+	}
+
+	onClose() {
+		const {contentEl} = this;
+		contentEl.empty();
+	}
+}
+
+// SessionManagementModal - Modal for managing all sessions
+class SessionManagementModal extends Modal {
+	plugin: any;
+	view: any;
+
+	constructor(app: App, plugin: any, view: any) {
+		super(app);
+		this.plugin = plugin;
+		this.view = view;
+	}
+
+	onOpen() {
+		const {contentEl} = this;
+		this.renderContent();
+	}
+
+	renderContent() {
+		const {contentEl} = this;
+		contentEl.empty();
+
+		contentEl.createEl('h2', {text: 'Manage Review Sessions'});
+
+		const sessions = this.plugin.settings.reviewSessions || [];
+
+		if (sessions.length === 0) {
+			const emptyMessage = contentEl.createDiv({cls: 'session-empty-message'});
+			emptyMessage.style.cssText = 'padding: 20px; text-align: center; color: var(--text-muted);';
+			emptyMessage.textContent = 'No review sessions found.';
+
+			const closeButton = contentEl.createDiv({cls: 'modal-button-container'});
+			closeButton.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end;';
+			closeButton.createEl('button', {text: 'Close'}).onclick = () => this.close();
+			return;
+		}
+
+		const sessionsContainer = contentEl.createDiv({cls: 'sessions-container'});
+		sessionsContainer.style.cssText = 'max-height: 400px; overflow-y: auto; margin: 20px 0;';
+
+		sessions.forEach((session: ReviewSession) => {
+			const sessionItem = sessionsContainer.createDiv({cls: 'session-item'});
+			sessionItem.style.cssText = `
+				padding: 12px;
+				margin-bottom: 8px;
+				background-color: var(--background-secondary);
+				border-radius: 4px;
+				border: 1px solid var(--background-modifier-border);
+			`;
+
+			const sessionHeader = sessionItem.createDiv({cls: 'session-header'});
+			sessionHeader.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;';
+
+			const sessionName = sessionHeader.createEl('strong', {text: session.name});
+			sessionName.style.cssText = 'font-size: 1.1em;';
+
+			const sessionActions = sessionHeader.createDiv({cls: 'session-actions'});
+			sessionActions.style.cssText = 'display: flex; gap: 8px;';
+
+			// Rename button
+			const renameButton = sessionActions.createEl('button', {text: 'Rename', cls: 'mod-small'});
+			renameButton.onclick = () => this.handleRename(session);
+
+			// Reset button
+			const resetButton = sessionActions.createEl('button', {text: 'Reset', cls: 'mod-small'});
+			resetButton.onclick = () => this.handleReset(session);
+
+			// Delete button
+			const deleteButton = sessionActions.createEl('button', {text: 'Delete', cls: 'mod-small mod-warning'});
+			deleteButton.onclick = () => this.handleDelete(session);
+
+			// Session details
+			const sessionDetails = sessionItem.createDiv({cls: 'session-details'});
+			sessionDetails.style.cssText = 'font-size: 0.9em; color: var(--text-muted);';
+
+			const reviewedCount = session.reviewedFiles?.length || 0;
+			sessionDetails.createDiv({text: `Reviewed files: ${reviewedCount}`});
+
+			if (session.hashtagFilter) {
+				sessionDetails.createDiv({text: `Hashtag filter: ${session.hashtagFilter}`});
+			}
+
+			if (session.textFilter) {
+				sessionDetails.createDiv({text: `Text filter: ${session.textFilter}`});
+			}
+
+			const created = new Date(session.created).toLocaleDateString();
+			const lastAccessed = new Date(session.lastAccessed).toLocaleDateString();
+			sessionDetails.createDiv({text: `Created: ${created} | Last accessed: ${lastAccessed}`});
+		});
+
+		const buttonContainer = contentEl.createDiv({cls: 'modal-button-container'});
+		buttonContainer.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end;';
+
+		const closeButton = buttonContainer.createEl('button', {text: 'Close'});
+		closeButton.onclick = () => this.close();
+	}
+
+	handleRename(session: ReviewSession) {
+		const modal = new SessionNameModal(this.app, session.name, async (newName: string) => {
+			const sessions = this.plugin.settings.reviewSessions || [];
+			const sessionIndex = sessions.findIndex((s: ReviewSession) => s.id === session.id);
+
+			if (sessionIndex !== -1) {
+				sessions[sessionIndex].name = newName;
+				await this.plugin.saveSettings();
+				new Notice(`Session renamed to "${newName}"`);
+				this.renderContent();
+
+				// Update view if this is the current session
+				if (this.view && this.view.currentSession?.id === session.id) {
+					this.view.currentSession.name = newName;
+					this.view.updateSessionDisplay();
+				}
+			}
+		});
+		modal.open();
+	}
+
+	handleReset(session: ReviewSession) {
+		const confirmModal = new Modal(this.app);
+		confirmModal.contentEl.empty();
+		confirmModal.contentEl.createEl('h2', {text: 'Reset Session?'});
+		confirmModal.contentEl.createEl('p', {text: `Are you sure you want to reset the session "${session.name}"?`});
+		confirmModal.contentEl.createEl('p', {text: 'This will clear all reviewed files and filters, but keep the session.'});
+
+		const buttonContainer = confirmModal.contentEl.createDiv({cls: 'modal-button-container'});
+		buttonContainer.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end; gap: 8px;';
+
+		const cancelButton = buttonContainer.createEl('button', {text: 'Cancel'});
+		cancelButton.onclick = () => confirmModal.close();
+
+		const resetButton = buttonContainer.createEl('button', {text: 'Reset', cls: 'mod-warning'});
+		resetButton.onclick = async () => {
+			const sessions = this.plugin.settings.reviewSessions || [];
+			const sessionIndex = sessions.findIndex((s: ReviewSession) => s.id === session.id);
+
+			if (sessionIndex !== -1) {
+				sessions[sessionIndex].reviewedFiles = [];
+				sessions[sessionIndex].hashtagFilter = '';
+				sessions[sessionIndex].textFilter = '';
+				await this.plugin.saveSettings();
+				new Notice(`Session "${session.name}" has been reset`);
+				confirmModal.close();
+				this.renderContent();
+
+				// Update view if this is the current session
+				if (this.view && this.view.currentSession?.id === session.id) {
+					this.view.currentSession.reviewedFiles = [];
+					this.view.currentSession.hashtagFilter = '';
+					this.view.currentSession.textFilter = '';
+					this.view.reviewedFiles = new Set();
+					this.view.updateSessionDisplay();
+					this.view.loadReviewFiles();
+				}
+			}
+		};
+
+		confirmModal.open();
+	}
+
+	handleDelete(session: ReviewSession) {
+		const confirmModal = new Modal(this.app);
+		confirmModal.contentEl.empty();
+		confirmModal.contentEl.createEl('h2', {text: 'Delete Session?'});
+		confirmModal.contentEl.createEl('p', {text: `Are you sure you want to delete the session "${session.name}"?`});
+		confirmModal.contentEl.createEl('p', {
+			text: 'This action cannot be undone.',
+			cls: 'mod-warning'
+		}).style.cssText = 'color: var(--text-error); font-weight: 500;';
+
+		const buttonContainer = confirmModal.contentEl.createDiv({cls: 'modal-button-container'});
+		buttonContainer.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end; gap: 8px;';
+
+		const cancelButton = buttonContainer.createEl('button', {text: 'Cancel'});
+		cancelButton.onclick = () => confirmModal.close();
+
+		const deleteButton = buttonContainer.createEl('button', {text: 'Delete', cls: 'mod-warning'});
+		deleteButton.onclick = async () => {
+			const sessions = this.plugin.settings.reviewSessions || [];
+			const sessionIndex = sessions.findIndex((s: ReviewSession) => s.id === session.id);
+
+			if (sessionIndex !== -1) {
+				const deletedName = sessions[sessionIndex].name;
+				sessions.splice(sessionIndex, 1);
+				await this.plugin.saveSettings();
+				new Notice(`Session "${deletedName}" has been deleted`);
+				confirmModal.close();
+				this.renderContent();
+
+				// If this was the current session in the view, clear it
+				if (this.view && this.view.currentSession?.id === session.id) {
+					this.view.currentSession = null;
+					this.view.reviewedFiles = new Set();
+					this.view.updateSessionDisplay();
+					this.view.loadReviewFiles();
+				}
+			}
+		};
+
+		confirmModal.open();
+	}
+
+	onClose() {
+		const {contentEl} = this;
+		contentEl.empty();
 	}
 }

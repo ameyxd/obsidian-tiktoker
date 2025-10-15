@@ -6,7 +6,7 @@ This plugin was built as a personal project to fit my workflow and habits around
 
 ## Features
 
-### Current Version (1.5.0)
+### Current Version (1.5.1)
 
 #### Core Features
 - **Automatic note opening**: Created TikTok notes open immediately on both desktop and mobile (configurable)
@@ -17,7 +17,7 @@ This plugin was built as a personal project to fit my workflow and habits around
 - **Duplicate handling**: Intelligent detection with user prompts
 - **Hashtag integration**: Adds hashtags to content and properties
 - **Flexible templates**: Customize note titles and content layout
-- **Local transcription**: Desktop-only speech-to-text using faster-whisper (requires Python, yt-dlp, ffmpeg)
+- **Local transcription**: Desktop-only speech-to-text using whisper.cpp (requires Python, yt-dlp, ffmpeg)
 - **Batch processing**: Handle multiple URLs at once
 
 #### Review Queue System
@@ -28,6 +28,8 @@ A sidebar interface for reviewing and organizing saved TikToks:
 - Smart sorting: By date, author, or hashtags
 - Priority mode: Starred items always appear first
 - Progress tracking: Visual bar and counter showing position
+- Session management: Save filter contexts for different content themes
+- Content filtering: Filter by hashtags (searches tags and content) or text (searches transcription/description only)
 
 **Note Management:**
 - Tag management: Mark as watched, starred, review again, or skip
@@ -35,18 +37,25 @@ A sidebar interface for reviewing and organizing saved TikToks:
 - Editable content: Edit description and transcription inline
 - Clickable hashtags: Opens global search
 - Undo support: Revert tag changes
+- Dataview integration: Insert dataview queries based on active filters
 
 **Interface:**
 - Resizable embed: Adjust player size
 - Smooth transitions: Optional animations (configurable)
 - Smart navigation: Previous/next buttons
 - Open in new tab: Quick access to full note
+- Side-by-side filter inputs: Hashtag and text filters displayed horizontally
+- Improved padding: Better spacing on navigation and status controls
 
 **Settings:**
 - Progress bar display
 - Animation transitions
 - Default sort mode
 - Priority mode toggle
+- Button layout options: Choose between sticky footer, scroll container, or floating action bar
+- Auto-pin sidebar: Automatically pin review queue to right sidebar
+- Session management: Enable/disable sessions with customizable cleanup settings
+- Dataview queries: Customize query templates for note integration
 
 Access via command: "Start TikTok Review Session"
 
