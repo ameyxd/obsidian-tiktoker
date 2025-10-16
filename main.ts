@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer, Menu, MenuItem } from 'obsidian';
 
 const VIEW_TYPE_TIKTOK_REVIEW = 'tiktok-review-view';
 
@@ -126,6 +126,37 @@ export default class TikTokerPlugin extends Plugin {
 				this.activateReviewView();
 			}
 		});
+
+		// Register mobile share menu integration
+		this.registerEvent(
+			this.app.workspace.on('receive-text-menu' as any, (menu: Menu, shareText: string) => {
+				menu.addItem((item: MenuItem) => {
+					item.setTitle('TikToker');
+					item.setIcon('video');
+					item.onClick(async () => {
+						// Write shared text to clipboard so processTikTokFromClipboard can read it
+						await navigator.clipboard.writeText(shareText);
+						this.processTikTokFromClipboard();
+					});
+				});
+			})
+		);
+
+		this.registerEvent(
+			this.app.workspace.on('url-menu' as any, (menu: Menu, url: string) => {
+				if (this.isTikTokUrl(url)) {
+					menu.addItem((item: MenuItem) => {
+						item.setTitle('TikToker');
+						item.setIcon('video');
+						item.onClick(async () => {
+							// Write URL to clipboard so processTikTokFromClipboard can read it
+							await navigator.clipboard.writeText(url);
+							this.processTikTokFromClipboard();
+						});
+					});
+				}
+			})
+		);
 
 		this.addSettingTab(new TikTokerSettingTab(this.app, this));
 	}
