@@ -1,5 +1,7 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer, Menu, MenuItem } from 'obsidian';
 import { TranscriptionService, TranscriptionSettings } from './transcription';
+import { ScriptInstaller } from './scriptInstaller';
+import { ScriptInstallationModal } from './scriptInstallationModal';
 
 const VIEW_TYPE_TIKTOK_REVIEW = 'tiktok-review-view';
 
@@ -54,6 +56,12 @@ interface TikTokerSettings {
 	enableGlobalCache: boolean;
 	globalCacheMaxSizeMB: number;
 	autoClearCacheAfterDays: number;
+	// Script Installation Settings
+	scriptsInstalled: boolean;
+	transcriptionFirstRun: boolean;
+	transcriptionSetupDismissed: boolean;
+	transcriptionCollapsed: boolean;
+	setupBannerDismissed: boolean;
 	// Review Queue Settings
 	reviewQueueShowProgressBar: boolean;
 	reviewQueueEnableTransitions: boolean;
@@ -111,6 +119,12 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	enableGlobalCache: true,
 	globalCacheMaxSizeMB: 200,
 	autoClearCacheAfterDays: 7,
+	// Script Installation Settings
+	scriptsInstalled: false,
+	transcriptionFirstRun: true,
+	transcriptionSetupDismissed: false,
+	transcriptionCollapsed: true,
+	setupBannerDismissed: false,
 	// Review Queue Settings
 	reviewQueueShowProgressBar: true,
 	reviewQueueEnableTransitions: true,
@@ -140,14 +154,38 @@ export default class TikTokerPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		// Auto-detect whisper script path if not set
-		if (!this.settings.whisperScriptPath && !Platform.isMobile) {
+		// Verify whisper scripts exist (always check, not just when path is empty)
+		if (!Platform.isMobile) {
 			const path = require('path');
+			const fs = require('fs');
+			const vaultPath = (this.app.vault.adapter as any).basePath || '';
 			const pluginDir = (this.manifest as any).dir || '';
-			const autoScriptPath = path.join(pluginDir, 'whisper-scripts', 'tiktok2text.sh');
-			this.settings.whisperScriptPath = autoScriptPath;
-			await this.saveSettings();
-			this.debugLog('Auto-detected whisper script path:', autoScriptPath);
+			const absolutePluginDir = path.join(vaultPath, pluginDir);
+
+			// Use existing path if set, otherwise try auto-detection
+			const scriptPath = this.settings.whisperScriptPath ||
+			                   path.join(absolutePluginDir, 'whisper-scripts', 'tiktok2text.sh');
+
+			// Verify the script file actually exists
+			if (fs.existsSync(scriptPath)) {
+				this.settings.whisperScriptPath = scriptPath;
+				this.settings.scriptsInstalled = true;
+				await this.saveSettings();
+				this.debugLog('Scripts verified:', scriptPath);
+			} else {
+				this.settings.scriptsInstalled = false;
+				this.debugLog('Scripts not found at:', scriptPath);
+
+				// Show installation notice on first load if scripts not installed
+				if (this.settings.transcriptionFirstRun && !this.settings.transcriptionSetupDismissed) {
+					// Delay to let Obsidian fully load
+					setTimeout(() => {
+						this.showTranscriptionSetupNotice();
+					}, 2000);
+				}
+			}
+		} else if (Platform.isMobile) {
+			this.settings.scriptsInstalled = false;
 		}
 
 		// Initialize transcription service
@@ -168,7 +206,8 @@ export default class TikTokerPlugin extends Plugin {
 		this.transcriptionService = new TranscriptionService(
 			this.app,
 			transcriptionSettings,
-			this.debugLog.bind(this)
+			this.debugLog.bind(this),
+			() => this.openScriptInstallationModal() // Callback to open installer
 		);
 
 		// Register the TikTok Review view
@@ -189,6 +228,7 @@ export default class TikTokerPlugin extends Plugin {
 			}
 		});
 
+		// Always register transcription command - let it fail with helpful errors if not set up
 		this.addCommand({
 			id: 'transcribe-tiktok',
 			name: 'Transcribe TikTok in current note',
@@ -213,10 +253,37 @@ export default class TikTokerPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'install-transcription-scripts',
+			name: 'Install Transcription Scripts',
+			callback: () => {
+				this.openScriptInstallationModal();
+			}
+		});
+
+		this.addCommand({
 			id: 'test-transcription-setup',
 			name: 'Test Transcription Setup',
 			callback: () => {
 				this.testTranscriptionSetup();
+			}
+		});
+
+		// Always register bulk transcription commands - let them fail with helpful errors if not set up
+		this.addCommand({
+			id: 'transcribe-recent-tiktok-notes',
+			name: 'Transcribe Recent TikTok Notes (7 days)',
+			callback: async () => {
+				const files = await this.getUntranscribedTikTokNotes(7);
+				await this.transcribeTikTokNotes(files, 'recent');
+			}
+		});
+
+		this.addCommand({
+			id: 'transcribe-all-tiktok-notes',
+			name: 'Transcribe All Untranscribed TikTok Notes',
+			callback: async () => {
+				const files = await this.getUntranscribedTikTokNotes();
+				await this.transcribeTikTokNotes(files, 'all');
 			}
 		});
 
@@ -1735,6 +1802,73 @@ export default class TikTokerPlugin extends Plugin {
 		}
 	}
 
+	private async getUntranscribedTikTokNotes(recentDays?: number): Promise<TFile[]> {
+		const tiktokFolder = this.settings.outputFolder;
+		const allFiles = this.app.vault.getMarkdownFiles()
+			.filter(file => file.path.startsWith(tiktokFolder + '/'));
+
+		const untranscribed: TFile[] = [];
+		const cutoffTime = recentDays ? Date.now() - (recentDays * 24 * 60 * 60 * 1000) : 0;
+
+		for (const file of allFiles) {
+			// Skip if filtering by recent and file is too old
+			if (recentDays && file.stat.ctime < cutoffTime) {
+				continue;
+			}
+
+			// Check if file has transcription
+			const content = await this.app.vault.read(file);
+			const cache = this.app.metadataCache.getFileCache(file);
+
+			// Skip if already transcribed (has transcribed property or ## Transcription section)
+			const hasTranscribedProperty = cache?.frontmatter?.transcribed === true;
+			const hasTranscriptionSection = content.includes('## Transcription');
+
+			if (!hasTranscribedProperty && !hasTranscriptionSection) {
+				// Check if file has TikTok URL
+				const tiktokUrlPattern = /https:\/\/(?:www\.|vm\.)?tiktok\.com\/[^\s\)]+/g;
+				if (tiktokUrlPattern.test(content)) {
+					untranscribed.push(file);
+				}
+			}
+		}
+
+		return untranscribed;
+	}
+
+	private async transcribeTikTokNotes(files: TFile[], commandName: string) {
+		if (!this.settings.scriptsInstalled) {
+			new Notice('Transcription scripts not installed. Opening installer...');
+			this.openScriptInstallationModal();
+			return;
+		}
+
+		if (files.length === 0) {
+			new Notice(`No untranscribed TikTok notes found`);
+			return;
+		}
+
+		// Extract URLs from files
+		const urls: string[] = [];
+		const tiktokUrlPattern = /https:\/\/(?:www\.|vm\.)?tiktok\.com\/[^\s\)]+/g;
+
+		for (const file of files) {
+			const content = await this.app.vault.read(file);
+			const matches = content.match(tiktokUrlPattern);
+			if (matches && matches.length > 0) {
+				urls.push(matches[0]); // Take first URL from each file
+			}
+		}
+
+		if (urls.length === 0) {
+			new Notice('No TikTok URLs found in selected notes');
+			return;
+		}
+
+		new Notice(`Starting transcription for ${urls.length} TikTok note${urls.length > 1 ? 's' : ''}...`);
+		await this.processBulkTikToks(urls, true);
+	}
+
 	private async processTikTokUrlBulk(url: string): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean, isSlideshow?: boolean, isPrivate?: boolean, filePath?: string, data?: any}> {
 		try {
 			const expandedUrl = await this.expandUrl(url);
@@ -1870,27 +2004,103 @@ export default class TikTokerPlugin extends Plugin {
 		}
 	}
 
+	showTranscriptionSetupNotice() {
+		const notice = new Notice('TikToker: Local transcription available! Click to set up.', 0);
+		const noticeEl = (notice as any).noticeEl;
+
+		if (noticeEl) {
+			noticeEl.style.cssText = 'cursor: pointer;';
+			noticeEl.onclick = () => {
+				notice.hide();
+				this.openScriptInstallationModal();
+			};
+
+			// Auto-hide after 10 seconds
+			setTimeout(() => notice.hide(), 10000);
+		}
+	}
+
+	openScriptInstallationModal() {
+		const path = require('path');
+		const vaultPath = (this.app.vault.adapter as any).basePath || '';
+		const pluginDir = (this.manifest as any).dir || '';
+		const absolutePluginDir = path.join(vaultPath, pluginDir);
+		const installer = new ScriptInstaller(absolutePluginDir);
+
+		const modal = new ScriptInstallationModal(
+			this.app,
+			installer,
+			() => this.refreshScriptDetection()
+		);
+		modal.open();
+	}
+
+	async refreshScriptDetection() {
+		// Re-run script detection after installation
+		if (Platform.isMobile) {
+			this.settings.scriptsInstalled = false;
+			await this.saveSettings();
+			return;
+		}
+
+		const path = require('path');
+		const fs = require('fs');
+		const vaultPath = (this.app.vault.adapter as any).basePath || '';
+		const pluginDir = (this.manifest as any).dir || '';
+		const absolutePluginDir = path.join(vaultPath, pluginDir);
+		const autoScriptPath = path.join(absolutePluginDir, 'whisper-scripts', 'tiktok2text.sh');
+
+		if (fs.existsSync(autoScriptPath)) {
+			this.settings.whisperScriptPath = autoScriptPath;
+			this.settings.scriptsInstalled = true;
+			this.settings.transcriptionFirstRun = false; // Mark as no longer first run
+			await this.saveSettings();
+			this.debugLog('Scripts detected after installation:', autoScriptPath);
+
+			// Show success and offer to test
+			new Notice('Scripts installed successfully!');
+
+			// Refresh settings UI if it's open
+			// @ts-ignore - private API
+			const settingsTab = this.app.setting?.activeTab;
+			if (settingsTab) {
+				// @ts-ignore - private API
+				settingsTab.display?.();
+			}
+
+			// Run test setup
+			await this.testTranscriptionSetup();
+		} else {
+			this.settings.scriptsInstalled = false;
+			await this.saveSettings();
+			this.debugLog('Scripts still not found after installation attempt');
+			new Notice('Script verification failed. Please try manual installation.');
+		}
+	}
+
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
-		// Update transcription service settings
-		this.transcriptionService.settings = {
-			transcriptionApi: this.settings.transcriptionApi,
-			whisperScriptPath: this.settings.whisperScriptPath,
-			whisperModel: this.settings.whisperModel,
-			whisperBrowser: this.settings.whisperBrowser,
-			enableTranscription: this.settings.enableTranscription,
-			enableManualTranscriptionCommand: this.settings.enableManualTranscriptionCommand,
-			enableTranscriptionOnCreation: this.settings.enableTranscriptionOnCreation,
-			enableBulkTranscription: this.settings.enableBulkTranscription,
-			addTranscriptionPropertyToFrontmatter: this.settings.addTranscriptionPropertyToFrontmatter,
-			showTranscriptionCompleteNotification: this.settings.showTranscriptionCompleteNotification,
-			urlTimeout: this.settings.urlTimeout,
-			debugMode: this.settings.debugMode
-		};
+		// Update transcription service settings (if initialized)
+		if (this.transcriptionService) {
+			this.transcriptionService.settings = {
+				transcriptionApi: this.settings.transcriptionApi,
+				whisperScriptPath: this.settings.whisperScriptPath,
+				whisperModel: this.settings.whisperModel,
+				whisperBrowser: this.settings.whisperBrowser,
+				enableTranscription: this.settings.enableTranscription,
+				enableManualTranscriptionCommand: this.settings.enableManualTranscriptionCommand,
+				enableTranscriptionOnCreation: this.settings.enableTranscriptionOnCreation,
+				enableBulkTranscription: this.settings.enableBulkTranscription,
+				addTranscriptionPropertyToFrontmatter: this.settings.addTranscriptionPropertyToFrontmatter,
+				showTranscriptionCompleteNotification: this.settings.showTranscriptionCompleteNotification,
+				urlTimeout: this.settings.urlTimeout,
+				debugMode: this.settings.debugMode
+			};
+		}
 	}
 
 }
@@ -2442,6 +2652,55 @@ class TikTokerSettingTab extends PluginSettingTab {
 		infoBox.style.cssText = 'margin-bottom: 24px; padding: 12px; background-color: var(--background-secondary); border-radius: 4px;';
 		infoBox.createEl('strong', {text: 'Desktop Only: '});
 		infoBox.appendText('Local transcription requires Python, yt-dlp, ffmpeg, and faster-whisper.');
+
+		// Status Banner (shows installation status)
+		if (!Platform.isMobile && !this.plugin.settings.setupBannerDismissed) {
+			const banner = container.createEl('div');
+			banner.style.cssText = 'margin-bottom: 16px; padding: 12px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center;';
+
+			if (this.plugin.settings.scriptsInstalled) {
+				// Green success banner
+				banner.style.backgroundColor = 'var(--background-success)';
+				banner.style.borderLeft = '4px solid var(--text-success)';
+
+				const textDiv = banner.createDiv();
+				textDiv.createSpan({text: '✓ ', cls: 'success-icon'}).style.color = 'var(--text-success)';
+				textDiv.appendText('Scripts installed and ready');
+
+				const testBtn = banner.createEl('button', {text: 'Test Setup', cls: 'mod-cta'});
+				testBtn.style.marginLeft = '12px';
+				testBtn.onclick = async () => {
+					await this.plugin.testTranscriptionSetup();
+				};
+			} else {
+				// Yellow warning banner
+				banner.style.backgroundColor = 'var(--background-modifier-error)';
+				banner.style.borderLeft = '4px solid var(--text-warning)';
+
+				const contentDiv = banner.createDiv();
+				contentDiv.style.flex = '1';
+
+				const textDiv = contentDiv.createDiv();
+				textDiv.createSpan({text: '⚠ ', cls: 'warning-icon'}).style.color = 'var(--text-warning)';
+				textDiv.appendText('Transcription scripts not installed');
+
+				const buttonContainer = banner.createDiv();
+				buttonContainer.style.cssText = 'display: flex; gap: 8px;';
+
+				const installBtn = buttonContainer.createEl('button', {text: 'Install Now', cls: 'mod-cta'});
+				installBtn.onclick = () => {
+					this.plugin.openScriptInstallationModal();
+				};
+
+				const dismissBtn = buttonContainer.createEl('button', {text: '✕'});
+				dismissBtn.style.cssText = 'padding: 4px 8px; background: transparent; border: none; cursor: pointer; color: var(--text-muted);';
+				dismissBtn.onclick = async () => {
+					this.plugin.settings.setupBannerDismissed = true;
+					await this.plugin.saveSettings();
+					this.display();
+				};
+			}
+		}
 
 		const mainSection = this.createCollapsibleSection(container, 'Transcription Settings');
 

@@ -20,11 +20,13 @@ export class TranscriptionService {
 	settings: TranscriptionSettings;
 	activeTranscriptionModal: SingleTranscriptionModal | null = null;
 	debugLogCallback?: (message: string, ...args: any[]) => void;
+	openInstallerCallback?: () => void;
 
-	constructor(app: App, settings: TranscriptionSettings, debugLogCallback?: (message: string, ...args: any[]) => void) {
+	constructor(app: App, settings: TranscriptionSettings, debugLogCallback?: (message: string, ...args: any[]) => void, openInstallerCallback?: () => void) {
 		this.app = app;
 		this.settings = settings;
 		this.debugLogCallback = debugLogCallback;
+		this.openInstallerCallback = openInstallerCallback;
 	}
 
 	private debugLog(message: string, ...args: any[]): void {
@@ -45,7 +47,13 @@ export class TranscriptionService {
 		}
 
 		if (!this.settings.whisperScriptPath) {
-			new Notice('Whisper script path not configured in settings');
+			// Offer to install scripts instead of just showing error
+			if (this.openInstallerCallback) {
+				new Notice('Transcription scripts not installed. Opening installer...');
+				this.openInstallerCallback();
+			} else {
+				new Notice('Whisper script path not configured in settings');
+			}
 			return;
 		}
 
@@ -341,14 +349,26 @@ export class TranscriptionService {
 
 			if (!this.settings.whisperScriptPath) {
 				if (!isBulkProcessing) {
-					new Notice('Whisper script path not configured');
+					// Offer to install scripts instead of just showing error
+					if (this.openInstallerCallback) {
+						new Notice('Transcription scripts not installed. Opening installer...');
+						this.openInstallerCallback();
+					} else {
+						new Notice('Whisper script path not configured');
+					}
 				}
 				return '';
 			}
 
 			if (!fs.existsSync(this.settings.whisperScriptPath)) {
 				if (!isBulkProcessing) {
-					new Notice('Whisper script not found at configured path');
+					// Offer to install scripts if file is missing
+					if (this.openInstallerCallback) {
+						new Notice('Transcription scripts not found. Opening installer...');
+						this.openInstallerCallback();
+					} else {
+						new Notice('Whisper script not found at configured path');
+					}
 				}
 				return '';
 			}

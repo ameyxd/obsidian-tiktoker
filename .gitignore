@@ -24,3 +24,10 @@ data.json
 # Development logs and notes
 .claude/
 WORKLOG.md
+
+# Whisper script artifacts (auto-generated, user-specific)
+whisper-scripts/.models/
+whisper-scripts/.tiktok2text-venv/
+whisper-scripts/*.txt
+whisper-scripts/*.wav
+whisper-scripts/__pycache__/

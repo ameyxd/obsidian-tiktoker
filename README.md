@@ -6,7 +6,7 @@ This plugin was built as a personal project to fit my workflow and habits around
 
 ## Features
 
-### Current Version (1.5.1)
+### Current Version (1.5.2)
 
 #### Core Features
 - **Automatic note opening**: Created TikTok notes open immediately on both desktop and mobile (configurable)
@@ -92,6 +92,60 @@ The plugin supports the following template variables:
 - `https://tiktok.com/@username/video/1234567890123456789`
 - `https://vm.tiktok.com/shortcode/` (short URLs)
 - `https://www.tiktok.com/t/shortcode/` (alternative short URLs)
+
+## Transcription Setup
+
+TikToker includes local transcription powered by OpenAI's Whisper model. This feature is desktop-only and requires a one-time setup.
+
+### First-Time Setup
+
+When you first load the plugin, you'll see a notice prompting you to install transcription scripts. You can also trigger installation manually via:
+- Command Palette: "Install Transcription Scripts"
+- Plugin Settings: Click the "Install Now" button in the Transcription section
+
+The installer will:
+1. Download the required scripts from the latest GitHub release
+2. Extract them to your plugin directory
+3. Verify the installation
+4. Prompt you to test the setup
+
+### Manual Installation
+
+If the automatic installer fails, you can install manually:
+
+1. Download `whisper-scripts.zip` from the [latest release](https://github.com/ameyxd/obsidian-tiktoker/releases/latest)
+2. Extract the zip file
+3. Copy the `whisper-scripts` folder to your plugin directory (the path is shown in settings)
+4. Reload the TikToker plugin
+5. Run "Test Transcription Setup" from the command palette
+
+### System Requirements
+
+The transcription feature requires:
+- **Desktop only** (not available on mobile)
+- **Python 3.8+**
+- **yt-dlp** (for downloading TikTok audio)
+- **ffmpeg** (for audio processing)
+- **whisper.cpp** (automatically installed by the scripts)
+
+The setup script will guide you through installing missing dependencies.
+
+### Available Commands
+
+Once scripts are installed, these commands become available:
+- **Transcribe TikTok in current note**: Transcribe a single note's TikTok video
+- **Transcribe Recent TikTok Notes (7 days)**: Batch transcribe notes from the past week
+- **Transcribe All Untranscribed TikTok Notes**: Process all notes without transcriptions
+- **Test Transcription Setup**: Verify your installation and dependencies
+
+### Transcription Models
+
+Choose from different Whisper models in settings (larger = more accurate but slower):
+- **tiny**: Fastest, less accurate
+- **base**: Good balance for most use cases
+- **small**: Better accuracy
+- **medium**: High accuracy
+- **large**: Maximum accuracy, slowest
 
 ## Installation
 
