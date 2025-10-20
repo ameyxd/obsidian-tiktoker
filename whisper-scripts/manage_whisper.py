@@ -148,15 +148,21 @@ def check_dependencies():
     print("Checking dependencies...")
     print("-" * 40)
 
+    # Platform-specific which command
+    which_cmd = 'where' if sys.platform == 'win32' else 'which'
+
+    # Use 'python' on Windows, 'python3' on Unix
+    python_cmd = 'python' if sys.platform == 'win32' else 'python3'
+
     dependencies = {
-        'python3': 'Python 3',
+        python_cmd: 'Python 3',
         'yt-dlp': 'yt-dlp',
         'ffmpeg': 'FFmpeg'
     }
 
     all_ok = True
     for cmd, name in dependencies.items():
-        result = subprocess.run(['which', cmd], capture_output=True)
+        result = subprocess.run([which_cmd, cmd], capture_output=True, shell=(sys.platform == 'win32'))
         if result.returncode == 0:
             print(f"✓ {name}: {result.stdout.decode().strip()}")
         else:
@@ -186,8 +192,17 @@ def check_dependencies():
     print("-" * 40)
 
     if not all_ok:
-        print("\nTo install missing dependencies on macOS:")
-        print("  brew install python3 yt-dlp ffmpeg")
+        if sys.platform == 'darwin':
+            print("\nTo install missing dependencies on macOS:")
+            print("  brew install python3 yt-dlp ffmpeg")
+        elif sys.platform == 'win32':
+            print("\nTo install missing dependencies on Windows:")
+            print("  winget install Python.Python.3.11")
+            print("  winget install yt-dlp.yt-dlp")
+            print("  winget install Gyan.FFmpeg")
+        else:
+            print("\nTo install missing dependencies on Linux:")
+            print("  sudo apt install python3 python3-pip yt-dlp ffmpeg")
 
     return all_ok
 

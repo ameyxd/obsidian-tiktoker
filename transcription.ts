@@ -4,7 +4,7 @@ export interface TranscriptionSettings {
 	transcriptionApi: 'none' | 'whisper-local' | 'assemblyai';
 	whisperScriptPath: string;
 	whisperModel: 'tiny' | 'base' | 'small' | 'medium' | 'large';
-	whisperBrowser: 'chrome' | 'safari';
+	whisperBrowser: 'chrome' | 'safari' | 'edge' | 'firefox';
 	enableTranscription: boolean;
 	enableManualTranscriptionCommand: boolean;
 	enableTranscriptionOnCreation: boolean;
@@ -344,6 +344,7 @@ export class TranscriptionService {
 			const { exec } = require('child_process');
 			const { promisify } = require('util');
 			const fs = require('fs');
+			const path = require('path');
 
 			const execAsync = promisify(exec);
 
@@ -379,25 +380,60 @@ export class TranscriptionService {
 
 			const transcriptionTimeout = (this.settings.urlTimeout + 60) * 1000;
 
+			// Platform detection
+			const isWindows = process.platform === 'win32';
+			const pathSeparator = isWindows ? ';' : ':';
+
+			// Build PATH with platform-appropriate paths
+			const pathComponents = isWindows
+				? [process.env.PATH || '']  // Windows: use existing PATH
+				: ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin', process.env.PATH || ''];
+
 			const env = {
 				...process.env,
-				PATH: [
-					'/opt/homebrew/bin',
-					'/usr/local/bin',
-					'/usr/bin',
-					'/bin',
-					process.env.PATH || ''
-				].filter(Boolean).join(':')
+				PATH: pathComponents.filter(Boolean).join(pathSeparator)
 			};
 
 			this.debugLog('Using PATH:', env.PATH);
 
-			const browsers = [this.settings.whisperBrowser, this.settings.whisperBrowser === 'chrome' ? 'safari' : 'chrome'];
+			// Determine which script to use based on platform
+			const scriptDir = path.dirname(this.settings.whisperScriptPath);
+			const pythonScript = path.join(scriptDir, 'tiktok2text.py');
+			const bashScript = this.settings.whisperScriptPath;
+
+			// Use Python script on Windows, bash script on Unix
+			const scriptToUse = isWindows ? pythonScript : bashScript;
+			const pythonCmd = isWindows ? 'python' : 'python3';
+
+			// Check if the appropriate script exists
+			if (!fs.existsSync(scriptToUse)) {
+				if (!isBulkProcessing) {
+					new Notice(`Script not found: ${scriptToUse}. Please reinstall transcription scripts.`);
+				}
+				return '';
+			}
+
+			// Build browser fallback list based on platform
+			const availableBrowsers = isWindows
+				? ['chrome', 'edge', 'firefox']  // Windows: no Safari
+				: ['chrome', 'safari', 'firefox'];  // macOS: include Safari
+
+			// Filter to valid browsers only
+			const browsers = [
+				this.settings.whisperBrowser,
+				...availableBrowsers.filter(b => b !== this.settings.whisperBrowser)
+			].filter(b => availableBrowsers.includes(b));
+
+			this.debugLog('Browser fallback order:', browsers);
 
 			let lastError = null;
 			for (const browser of browsers) {
 				try {
-					const command = `env PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH" "${this.settings.whisperScriptPath}" -b ${browser} -m "${this.settings.whisperModel}" "${url}"`;
+					// Build command based on platform
+					const command = isWindows
+						? `${pythonCmd} "${scriptToUse}" -b ${browser} -m "${this.settings.whisperModel}" "${url}"`
+						: `"${scriptToUse}" -b ${browser} -m "${this.settings.whisperModel}" "${url}"`;
+
 					this.debugLog(`Trying transcription with ${browser}:`, command);
 
 					const { stdout, stderr } = await execAsync(command, {

@@ -175,6 +175,7 @@ export class ScriptInstaller {
 
 			const requiredScripts = [
 				'tiktok2text.sh',
+				'tiktok2text.py',
 				'manage_whisper.py',
 				'process_tiktoks.py'
 			];
