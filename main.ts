@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer, Menu, MenuItem } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer, Menu, MenuItem, stringifyYaml } from 'obsidian';
 import { TranscriptionService, TranscriptionSettings } from './transcription';
 import { ScriptInstaller } from './scriptInstaller';
 import { ScriptInstallationModal } from './scriptInstallationModal';
@@ -179,7 +179,7 @@ export default class TikTokerPlugin extends Plugin {
 				// Show installation notice on first load if scripts not installed
 				if (this.settings.transcriptionFirstRun && !this.settings.transcriptionSetupDismissed) {
 					// Delay to let Obsidian fully load
-					setTimeout(() => {
+					window.setTimeout(() => {
 						this.showTranscriptionSetupNotice();
 					}, 2000);
 				}
@@ -447,7 +447,7 @@ export default class TikTokerPlugin extends Plugin {
 			this.debugLog('Attempting oEmbed:', oembedUrl);
 
 			const controller = new AbortController();
-			setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
+			window.setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
 
 			// Use different request methods for desktop vs mobile due to CORS
 			const response = Platform.isMobile
@@ -581,7 +581,7 @@ export default class TikTokerPlugin extends Plugin {
 				this.debugLog('Mobile: Attempting oEmbed on original /t/ URL:', oembedUrl);
 
 				const controller = new AbortController();
-				setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
+				window.setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
 
 				const response = await this.makeHttpRequest(oembedUrl, {
 					signal: controller.signal,
@@ -632,7 +632,7 @@ export default class TikTokerPlugin extends Plugin {
 				this.debugLog('Mobile: Attempting oEmbed for correct video ID:', oembedUrl);
 
 				const controller = new AbortController();
-				setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
+				window.setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
 
 				const response = await this.makeHttpRequest(oembedUrl, {
 					signal: controller.signal,
@@ -883,7 +883,7 @@ export default class TikTokerPlugin extends Plugin {
 			// Fallback: try to fetch page content to extract date (more complex)
 			try {
 				const controller = new AbortController();
-				setTimeout(() => controller.abort(), 5000); // 5 second timeout
+				window.setTimeout(() => controller.abort(), 5000); // 5 second timeout
 				
 				const response = await this.makeHeadRequest(url, {
 					signal: controller.signal,
@@ -978,7 +978,7 @@ export default class TikTokerPlugin extends Plugin {
 			this.debugLog('Mobile: Using proper redirect following for /t/ URL');
 			try {
 				const controller = new AbortController();
-				setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
+				window.setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
 
 				// Use fetch (like desktop) to get proper redirect URL
 				const response = await fetch(url, {
@@ -1008,7 +1008,7 @@ export default class TikTokerPlugin extends Plugin {
 		// Try network-based expansion for other patterns or as fallback
 		try {
 			const controller = new AbortController();
-			setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
+			window.setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
 
 			const response = await this.makeHeadRequest(url, {
 				redirect: 'follow',
@@ -1539,7 +1539,7 @@ export default class TikTokerPlugin extends Plugin {
 		}
 		
 		try {
-			if (existingFile && filePath === (folderPath ? `${folderPath}/${fileName}.md` : `${fileName}.md`)) {
+			if (existingFile instanceof TFile && filePath === (folderPath ? `${folderPath}/${fileName}.md` : `${fileName}.md`)) {
 				await this.app.fileManager.trashFile(existingFile);
 				await this.app.vault.create(filePath, noteContent);
 				if (!isBulkProcessing) new Notice(`Replaced: ${noteTitle}`);
@@ -1603,13 +1603,24 @@ export default class TikTokerPlugin extends Plugin {
 		});
 	}
 
+	private sanitizeFileName(fileName: string): string {
+		// Remove problematic characters that can cause Obsidian Sync conflicts or filesystem issues
+		// Replace | < > : " / \ ? * with safer alternatives or remove them
+		return fileName
+			.replace(/\|/g, '-')  // Pipe to dash
+			.replace(/[<>:"\/\\?*]/g, '')  // Remove Windows reserved characters
+			.trim();
+	}
+
 	private generateFileName(data: any): string {
-		return this.settings.fileNamingPattern
+		const fileName = this.settings.fileNamingPattern
 			.replace(/{{author}}/g, (data.author || 'unknown').replace(/[@#]/g, ''))
 			.replace(/{{date}}/g, data.createdDate || data.date || this.getCurrentDateString())
 			.replace(/{{videoId}}/g, data.videoId || 'unknown')
 			.replace(/{{description}}/g, (data.description || 'TikTok Video').replace(/#[\w\u00c0-\u024f\u1e00-\u1eff]+/gi, '').substring(0, 100).replace(/[^\w\s-]/g, '').trim())
 			.replace(/{{title}}/g, (data.description || 'tiktok').replace(/#[\w\u00c0-\u024f\u1e00-\u1eff]+/gi, '').substring(0, 50).replace(/[^\w\s-]/g, ''));
+
+		return this.sanitizeFileName(fileName);
 	}
 
 	private generateNoteTitle(data: any): string {
@@ -1637,31 +1648,34 @@ export default class TikTokerPlugin extends Plugin {
 		let content = '';
 
 		if (this.settings.enableProperties) {
-			content += '---\n';
-			if (this.settings.includeAuthor) content += `author: ${data.author}\n`;
+			const frontmatter: Record<string, any> = {};
+
+			if (this.settings.includeAuthor) frontmatter.author = data.author;
 			if (this.settings.includeDateCreated) {
-				content += `created: ${data.createdDate || data.date || this.getCurrentDateString()}\n`;
+				frontmatter.created = data.createdDate || data.date || this.getCurrentDateString();
 			}
 			// Add TikTok posted date
 			if (data.postedDate && data.postedDate !== (data.createdDate || data.date)) {
-				content += `posted: ${data.postedDate}\n`;
+				frontmatter.posted = data.postedDate;
 			}
-			if (this.settings.includeUrl) content += `url: ${data.url}\n`;
+			if (this.settings.includeUrl) frontmatter.url = data.url;
 			if (this.settings.includeExpandedUrl && data.expandedUrl && data.expandedUrl !== data.url) {
-				content += `expanded_url: ${data.expandedUrl}\n`;
+				frontmatter.expanded_url = data.expandedUrl;
 			}
-			
+
 			// Add source property
-			content += `source: "#tiktoker"\n`;
-			
+			frontmatter.source = "#tiktoker";
+
 			// Add tags with tiktoker and unreviewed_tiktok always included
 			if (this.settings.includeTagsFromHashtags && data.hashtags) {
 				const hashtagTags = data.hashtags.map((tag: string) => tag.replace('#', ''));
-				const allTags = ['tiktoker', 'unreviewed_tiktok', ...hashtagTags];
-				content += `tags: [${allTags.join(', ')}]\n`;
+				frontmatter.tags = ['tiktoker', 'unreviewed_tiktok', ...hashtagTags];
 			} else {
-				content += `tags: [tiktoker, unreviewed_tiktok]\n`;
+				frontmatter.tags = ['tiktoker', 'unreviewed_tiktok'];
 			}
+
+			content += '---\n';
+			content += stringifyYaml(frontmatter);
 			content += '---\n\n';
 		}
 
@@ -1721,7 +1735,7 @@ export default class TikTokerPlugin extends Plugin {
 			try {
 				// Add timeout for individual URL processing
 				const timeoutPromise = new Promise((_, reject) => 
-					setTimeout(() => reject(new Error('Processing timeout')), (this.settings.urlTimeout + 5) * 1000)
+					window.setTimeout(() => reject(new Error('Processing timeout')), (this.settings.urlTimeout + 5) * 1000)
 				);
 
 				const processUrlPromise = this.processTikTokUrlBulk(url);
@@ -1817,7 +1831,7 @@ export default class TikTokerPlugin extends Plugin {
 			}
 
 			// Check if file has transcription
-			const content = await this.app.vault.read(file);
+			const content = await this.app.vault.cachedRead(file);
 			const cache = this.app.metadataCache.getFileCache(file);
 
 			// Skip if already transcribed (has transcribed property or ## Transcription section)
@@ -1853,7 +1867,7 @@ export default class TikTokerPlugin extends Plugin {
 		const tiktokUrlPattern = /https:\/\/(?:www\.|vm\.)?tiktok\.com\/[^\s\)]+/g;
 
 		for (const file of files) {
-			const content = await this.app.vault.read(file);
+			const content = await this.app.vault.cachedRead(file);
 			const matches = content.match(tiktokUrlPattern);
 			if (matches && matches.length > 0) {
 				urls.push(matches[0]); // Take first URL from each file
@@ -1928,7 +1942,7 @@ export default class TikTokerPlugin extends Plugin {
 		if (duplicates.length > 0 || failed.length > 0 || oembedFailed.length > 0 || slideshows.length > 0 || skippedPrivate.length > 0) {
 			const modal = new BulkResultsModal(this.app, this, successful, failed, duplicates, oembedFailed, slideshows, skippedPrivate, (failedUrls: string[]) => {
 				// Add a delay before retrying
-				setTimeout(() => {
+				window.setTimeout(() => {
 					this.processBulkTikToks(failedUrls);
 				}, 2000); // 2 second delay
 			});
@@ -2016,7 +2030,7 @@ export default class TikTokerPlugin extends Plugin {
 			};
 
 			// Auto-hide after 10 seconds
-			setTimeout(() => notice.hide(), 10000);
+			window.setTimeout(() => notice.hide(), 10000);
 		}
 	}
 
@@ -2136,7 +2150,7 @@ class TestResultModal extends Modal {
 
 		resultContainer.textContent = this.result;
 
-		const buttonContainer = contentEl.createDiv({cls: 'modal-button-container'});
+		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
 		buttonContainer.style.cssText = 'margin-top: 16px; display: flex; justify-content: flex-end;';
 
 		if (this.hasErrors) {
@@ -2201,7 +2215,7 @@ class DependencyCheckModal extends Modal {
 			const originalText = button.textContent;
 			button.textContent = 'Copied!';
 			button.style.backgroundColor = 'var(--interactive-success)';
-			setTimeout(() => {
+			window.setTimeout(() => {
 				button.textContent = originalText;
 				button.style.backgroundColor = '';
 			}, 2000);
@@ -2215,7 +2229,7 @@ class DependencyCheckModal extends Modal {
 		contentEl.createEl('h2', {text: 'Dependency Check'});
 
 		// Status section
-		const statusSection = contentEl.createDiv({cls: 'dependency-status'});
+		const statusSection = contentEl.createDiv({cls: 'tiktoker-dependency-status'});
 		statusSection.style.cssText = 'margin: 16px 0; padding: 16px; background-color: var(--background-secondary); border-radius: 4px;';
 
 		const allOk = Object.values(this.dependencies).every(val => val);
@@ -2223,12 +2237,12 @@ class DependencyCheckModal extends Modal {
 		if (allOk) {
 			statusSection.createEl('div', {
 				text: '✓ All dependencies installed!',
-				cls: 'dependency-success'
+				cls: 'tiktoker-dependency-success'
 			}).style.cssText = 'color: var(--interactive-success); font-weight: 600; margin-bottom: 12px;';
 		} else {
 			statusSection.createEl('div', {
 				text: 'Some dependencies are missing',
-				cls: 'dependency-warning'
+				cls: 'tiktoker-dependency-warning'
 			}).style.cssText = 'color: var(--text-warning); font-weight: 600; margin-bottom: 12px;';
 		}
 
@@ -2253,7 +2267,7 @@ class DependencyCheckModal extends Modal {
 
 		// Installation section (only if missing dependencies)
 		if (!allOk) {
-			const installSection = contentEl.createDiv({cls: 'installation-instructions'});
+			const installSection = contentEl.createDiv({cls: 'tiktoker-installation-instructions'});
 			installSection.style.cssText = 'margin: 16px 0;';
 
 			installSection.createEl('h3', {text: 'Installation Instructions'});
@@ -2358,10 +2372,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 		const {containerEl} = this;
 		containerEl.empty();
 
-		containerEl.createEl('h2', {text: 'TikToker Settings'});
-
 		// Create tab navigation
-		const tabNav = containerEl.createDiv({cls: 'tiktok-settings-tabs'});
+		const tabNav = containerEl.createDiv({cls: 'tiktoker-settings-tabs'});
 		tabNav.style.cssText = `
 			display: flex;
 			gap: 8px;
@@ -2400,7 +2412,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		});
 
 		// Tab content
-		const tabContent = containerEl.createDiv({cls: 'tiktok-settings-content'});
+		const tabContent = containerEl.createDiv({cls: 'tiktoker-settings-content'});
 
 		switch (this.activeTab) {
 			case 'general':
@@ -2714,6 +2726,12 @@ class TikTokerSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 					this.display();
 				}));
+
+		// Add dependency disclaimer
+		const disclaimerEl = mainSection.createDiv({cls: 'setting-item-description'});
+		disclaimerEl.style.cssText = 'margin-top: -10px; margin-bottom: 15px; padding: 10px; background-color: var(--background-secondary); border-left: 3px solid var(--interactive-accent); font-size: 0.9em;';
+		disclaimerEl.createEl('strong', {text: 'Note: '});
+		disclaimerEl.appendText('Enabling transcription requires installing external dependencies (Python 3, yt-dlp, ffmpeg, and faster-whisper). These packages are installed separately on your system. See the Transcription Setup section in settings for installation instructions.');
 
 		if (this.plugin.settings.enableTranscription) {
 			// Force whisper-local if transcription is enabled
@@ -3113,7 +3131,7 @@ class DuplicateFileModal extends Modal {
 		contentEl.createEl('p', {text: `Title: "${this.noteTitle}"`});
 		contentEl.createEl('p', {text: 'What would you like to do?'});
 
-		const buttonContainer = contentEl.createDiv({cls: 'modal-button-container'});
+		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
 
 		const replaceButton = buttonContainer.createEl('button', {text: 'Replace', cls: 'mod-cta'});
 		replaceButton.onclick = () => {
@@ -3162,7 +3180,7 @@ class BulkProcessingModal extends Modal {
 		contentEl.createEl('p', {text: 'Select which URLs you want to process:'});
 
 		// Select All / Deselect All buttons
-		const buttonContainer = contentEl.createDiv({cls: 'bulk-select-buttons'});
+		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-bulk-select-buttons'});
 
 		const selectAllBtn = buttonContainer.createEl('button', {text: 'Select All'});
 		selectAllBtn.onclick = () => {
@@ -3175,10 +3193,10 @@ class BulkProcessingModal extends Modal {
 		};
 
 		// URL list with checkboxes
-		const urlContainer = contentEl.createDiv({cls: 'bulk-url-list'});
+		const urlContainer = contentEl.createDiv({cls: 'tiktoker-bulk-url-list'});
 
 		this.urls.forEach(url => {
-			const urlItem = urlContainer.createDiv({cls: 'bulk-url-item'});
+			const urlItem = urlContainer.createDiv({cls: 'tiktoker-bulk-url-item'});
 
 			const checkbox = urlItem.createEl('input', {type: 'checkbox'});
 			checkbox.checked = true; // Default to checked
@@ -3189,7 +3207,7 @@ class BulkProcessingModal extends Modal {
 
 		// Transcription toggle (desktop only)
 		if (!Platform.isMobile) {
-			const transcriptionContainer = contentEl.createDiv({cls: 'transcription-toggle'});
+			const transcriptionContainer = contentEl.createDiv({cls: 'tiktoker-transcription-toggle'});
 
 			const transcriptionLabel = transcriptionContainer.createEl('label');
 
@@ -3200,7 +3218,7 @@ class BulkProcessingModal extends Modal {
 		}
 
 		// Action buttons
-		const actionContainer = contentEl.createDiv({cls: 'modal-button-container'});
+		const actionContainer = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
 
 		const processBtn = actionContainer.createEl('button', {text: 'Process Selected', cls: 'mod-cta'});
 		processBtn.onclick = () => {
@@ -3259,27 +3277,27 @@ class BulkProgressModal extends Modal {
 		
 		this.statusText = contentEl.createEl('p', {text: 'Starting...'});
 		
-		const progressContainer = contentEl.createDiv({cls: 'progress-container'});
+		const progressContainer = contentEl.createDiv({cls: 'tiktoker-progress-container'});
 
-		this.progressBar = progressContainer.createDiv({cls: 'progress-bar'});
+		this.progressBar = progressContainer.createDiv({cls: 'tiktoker-progress-bar'});
 
-		const progressText = contentEl.createEl('p', {text: `0 / ${this.total} processed`, cls: 'progress-text'});
+		const progressText = contentEl.createEl('p', {text: `0 / ${this.total} processed`, cls: 'tiktoker-progress-text'});
 		progressText.id = 'progress-text';
 
 		// Transcription status section (desktop only)
 		if (!Platform.isMobile) {
-			const transcriptionSection = contentEl.createDiv({cls: 'transcription-section'});
+			const transcriptionSection = contentEl.createDiv({cls: 'tiktoker-transcription-section'});
 			transcriptionSection.createEl('h4', {text: 'Transcription Status'});
 			this.transcriptionStatusText = transcriptionSection.createEl('p', {text: 'Waiting for files to be created...'});
-			const transcriptionContainer = transcriptionSection.createDiv({cls: 'mini-progress-bar'});
-			this.transcriptionProgress = transcriptionContainer.createDiv({cls: 'mini-progress'});
+			const transcriptionContainer = transcriptionSection.createDiv({cls: 'tiktoker-mini-progress-bar'});
+			this.transcriptionProgress = transcriptionContainer.createDiv({cls: 'tiktoker-mini-progress'});
 
 			// Current transcription progress section
-			const currentSection = transcriptionSection.createDiv({cls: 'current-transcription'});
+			const currentSection = transcriptionSection.createDiv({cls: 'tiktoker-current-transcription'});
 			this.currentTranscriptionText = currentSection.createEl('p', {text: ''});
 			this.currentTranscriptionTimer = this.currentTranscriptionText.createEl('span', {text: ''});
-			const currentContainer = currentSection.createDiv({cls: 'mini-progress-bar'});
-			this.currentTranscriptionProgress = currentContainer.createDiv({cls: 'mini-progress'});
+			const currentContainer = currentSection.createDiv({cls: 'tiktoker-mini-progress-bar'});
+			this.currentTranscriptionProgress = currentContainer.createDiv({cls: 'tiktoker-mini-progress'});
 		}
 	}
 
@@ -3318,7 +3336,7 @@ class BulkProgressModal extends Modal {
 		}
 
 		// Create minimal progress toast
-		this.minimalToast = document.body.createDiv({cls: 'minimal-progress-toast'});
+		this.minimalToast = document.body.createDiv({cls: 'tiktoker-minimal-progress-toast'});
 
 		// Make clickable to reopen modal
 		this.minimalToast.onclick = () => {
@@ -3329,15 +3347,15 @@ class BulkProgressModal extends Modal {
 			this.open(); // Reopen the progress modal
 		};
 
-		const progressText = this.minimalToast.createDiv({cls: 'progress-text'});
+		const progressText = this.minimalToast.createDiv({cls: 'tiktoker-progress-text'});
 		progressText.textContent = `Processing TikToks: ${this.current} / ${this.total}`;
 
-		const miniProgressBar = this.minimalToast.createDiv({cls: 'mini-progress-bar'});
-		const miniProgress = miniProgressBar.createDiv({cls: 'mini-progress'});
+		const miniProgressBar = this.minimalToast.createDiv({cls: 'tiktoker-mini-progress-bar'});
+		const miniProgress = miniProgressBar.createDiv({cls: 'tiktoker-mini-progress'});
 		miniProgress.style.width = `${(this.current / this.total) * 100}%`;
 
 		// Auto-remove after completion or timeout
-		setTimeout(() => {
+		window.setTimeout(() => {
 			if (this.minimalToast) {
 				this.minimalToast.remove();
 				this.minimalToast = null;
@@ -3362,7 +3380,7 @@ class BulkProgressModal extends Modal {
 		// Remove toast when completed
 		if (this.current >= this.total) {
 			this.isCompleted = true;
-			setTimeout(() => {
+			window.setTimeout(() => {
 				if (this.minimalToast) {
 					this.minimalToast.remove();
 					this.minimalToast = null;
@@ -3401,7 +3419,7 @@ class BulkProgressModal extends Modal {
 				this.transcriptionStatusText.textContent = `All transcriptions completed (avg: ${avgTime}s)`;
 
 				// Close modal after all transcriptions complete with delay
-				setTimeout(() => {
+				window.setTimeout(() => {
 					this.close();
 				}, 2000);
 			} else if (inProgress > 0) {
@@ -3443,7 +3461,7 @@ class BulkProgressModal extends Modal {
 		}
 
 		// Start real-time timer and progress animation
-		this.currentTranscription.interval = setInterval(() => {
+		this.currentTranscription.interval = window.setInterval(() => {
 			if (this.currentTranscription && this.currentTranscriptionTimer) {
 				const elapsed = (Date.now() - this.currentTranscription.startTime) / 1000;
 				this.currentTranscriptionTimer.textContent = ` (${elapsed.toFixed(1)}s)`;
@@ -3466,7 +3484,7 @@ class BulkProgressModal extends Modal {
 
 	stopCurrentTranscriptionTracking() {
 		if (this.currentTranscription?.interval) {
-			clearInterval(this.currentTranscription.interval);
+			window.clearInterval(this.currentTranscription.interval);
 		}
 
 		if (this.currentTranscriptionProgress) {
@@ -3530,7 +3548,7 @@ class BulkResultsModal extends Modal {
 		contentEl.createEl('h2', {text: 'Bulk Processing Results'});
 
 		// Summary
-		const summary = contentEl.createDiv({cls: 'results-summary'});
+		const summary = contentEl.createDiv({cls: 'tiktoker-results-summary'});
 		summary.createEl('p', {text: `✅ Successfully processed: ${this.successful.length}`});
 		if (this.duplicates.length > 0) {
 			summary.createEl('p', {text: `⚠️ Duplicate files skipped: ${this.duplicates.length}`});
@@ -3550,30 +3568,30 @@ class BulkResultsModal extends Modal {
 		if (this.duplicates.length > 0) {
 			contentEl.createEl('h3', {text: 'Duplicate Files:'});
 			
-			const duplicatesContainer = contentEl.createDiv({cls: 'duplicate-urls'});
+			const duplicatesContainer = contentEl.createDiv({cls: 'tiktoker-duplicate-urls'});
 
 			this.duplicates.forEach(item => {
-				const duplicateItem = duplicatesContainer.createDiv({cls: 'duplicate-item'});
+				const duplicateItem = duplicatesContainer.createDiv({cls: 'tiktoker-duplicate-item'});
 				
-				const content = duplicateItem.createDiv({cls: 'content'});
+				const content = duplicateItem.createDiv({cls: 'tiktoker-content'});
 				
-				const titleDiv = content.createEl('div', {text: `${item.noteTitle || item.fileName}`, cls: 'title'});
-				const urlDiv = content.createEl('div', {text: item.url, cls: 'url'});
+				const titleDiv = content.createEl('div', {text: `${item.noteTitle || item.fileName}`, cls: 'tiktoker-title'});
+				const urlDiv = content.createEl('div', {text: item.url, cls: 'tiktoker-url'});
 				
-				const buttonContainer = duplicateItem.createDiv({cls: 'button-container'});
+				const buttonContainer = duplicateItem.createDiv({cls: 'tiktoker-button-container'});
 				
-				const replaceBtn = buttonContainer.createEl('button', {text: 'Replace', cls: 'duplicate-btn'});
+				const replaceBtn = buttonContainer.createEl('button', {text: 'Replace', cls: 'tiktoker-duplicate-btn'});
 				replaceBtn.onclick = () => this.handleDuplicateAction(item.url, 'replace');
 				
-				const duplicateBtn = buttonContainer.createEl('button', {text: 'Duplicate', cls: 'duplicate-btn'});
+				const duplicateBtn = buttonContainer.createEl('button', {text: 'Duplicate', cls: 'tiktoker-duplicate-btn'});
 				duplicateBtn.onclick = () => this.handleDuplicateAction(item.url, 'duplicate');
 				
-				const skipBtn = buttonContainer.createEl('button', {text: 'Skip', cls: 'duplicate-btn'});
+				const skipBtn = buttonContainer.createEl('button', {text: 'Skip', cls: 'tiktoker-duplicate-btn'});
 				skipBtn.onclick = () => this.handleDuplicateAction(item.url, 'skip');
 			});
 
 			// Add bulk duplicate actions
-			const bulkDuplicateActions = contentEl.createDiv({cls: 'bulk-duplicate-actions'});
+			const bulkDuplicateActions = contentEl.createDiv({cls: 'tiktoker-bulk-duplicate-actions'});
 			
 			const bulkReplaceBtn = bulkDuplicateActions.createEl('button', {text: 'Replace All Duplicates'});
 			bulkReplaceBtn.onclick = () => this.handleBulkDuplicateAction('replace');
@@ -3586,14 +3604,14 @@ class BulkResultsModal extends Modal {
 		if (this.slideshows.length > 0) {
 			contentEl.createEl('h3', {text: 'Image Slideshow Posts:'});
 			
-			const slideshowContainer = contentEl.createDiv({cls: 'slideshow-urls'});
+			const slideshowContainer = contentEl.createDiv({cls: 'tiktoker-slideshow-urls'});
 
 			this.slideshows.forEach(item => {
-				const slideshowItem = slideshowContainer.createDiv({cls: 'slideshow-item'});
-				const icon = slideshowItem.createSpan({text: '📸', cls: 'icon'});
+				const slideshowItem = slideshowContainer.createDiv({cls: 'tiktoker-slideshow-item'});
+				const icon = slideshowItem.createSpan({text: '📸', cls: 'tiktoker-icon'});
 				const content = slideshowItem.createDiv();
 				content.createEl('div', {text: `${item.noteTitle || item.fileName}`});
-				content.createEl('div', {text: item.url, cls: 'url'});
+				content.createEl('div', {text: item.url, cls: 'tiktoker-url'});
 			});
 		}
 
@@ -3601,13 +3619,13 @@ class BulkResultsModal extends Modal {
 		if (this.skippedPrivate.length > 0) {
 			contentEl.createEl('h3', {text: 'Private Videos Skipped:'});
 			
-			const privateContainer = contentEl.createDiv({cls: 'private-urls'});
+			const privateContainer = contentEl.createDiv({cls: 'tiktoker-private-urls'});
 
 			this.skippedPrivate.forEach(item => {
-				const privateItem = privateContainer.createDiv({cls: 'private-item'});
-				const icon = privateItem.createSpan({text: '🔒', cls: 'icon'});
+				const privateItem = privateContainer.createDiv({cls: 'tiktoker-private-item'});
+				const icon = privateItem.createSpan({text: '🔒', cls: 'tiktoker-icon'});
 				const content = privateItem.createDiv();
-				content.createEl('a', {href: item.url, text: item.url, cls: 'url'});
+				content.createEl('a', {href: item.url, text: item.url, cls: 'tiktoker-url'});
 			});
 		}
 
@@ -3615,30 +3633,30 @@ class BulkResultsModal extends Modal {
 		if (this.oembedFailed.length > 0) {
 			contentEl.createEl('h3', {text: 'Fallback Embed Files:'});
 			
-			const fallbackContainer = contentEl.createDiv({cls: 'fallback-urls'});
+			const fallbackContainer = contentEl.createDiv({cls: 'tiktoker-fallback-urls'});
 
 			this.oembedFailed.forEach(item => {
-				const fallbackItem = fallbackContainer.createDiv({cls: 'fallback-item'});
-				const icon = fallbackItem.createSpan({text: '🔄', cls: 'icon'});
+				const fallbackItem = fallbackContainer.createDiv({cls: 'tiktoker-fallback-item'});
+				const icon = fallbackItem.createSpan({text: '🔄', cls: 'tiktoker-icon'});
 				const content = fallbackItem.createDiv();
 				content.createEl('div', {text: `${item.noteTitle || item.fileName}`});
-				content.createEl('div', {text: item.url, cls: 'url'});
+				content.createEl('div', {text: item.url, cls: 'tiktoker-url'});
 			});
 		}
 
 		if (this.failed.length > 0) {
 			contentEl.createEl('h3', {text: 'Failed URLs:'});
 			
-			const failedContainer = contentEl.createDiv({cls: 'failed-urls'});
+			const failedContainer = contentEl.createDiv({cls: 'tiktoker-failed-urls'});
 
 			this.failed.forEach(item => {
-				const failedItem = failedContainer.createDiv({cls: 'failed-item'});
+				const failedItem = failedContainer.createDiv({cls: 'tiktoker-failed-item'});
 				failedItem.createEl('div', {text: item.url});
-				failedItem.createEl('div', {text: `Error: ${item.error || 'Unknown error'}`, cls: 'error-text'});
+				failedItem.createEl('div', {text: `Error: ${item.error || 'Unknown error'}`, cls: 'tiktoker-error-text'});
 			});
 
 			// Action buttons
-			const buttonContainer = contentEl.createDiv({cls: 'modal-button-container'});
+			const buttonContainer = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
 
 			const retryBtn = buttonContainer.createEl('button', {text: 'Retry Failed URLs', cls: 'mod-cta'});
 			retryBtn.onclick = () => {
@@ -3650,7 +3668,7 @@ class BulkResultsModal extends Modal {
 			const closeBtn = buttonContainer.createEl('button', {text: 'Close'});
 			closeBtn.onclick = () => this.close();
 		} else {
-			const buttonContainer = contentEl.createDiv({cls: 'modal-button-container'});
+			const buttonContainer = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
 			const closeBtn = buttonContainer.createEl('button', {text: 'Close', cls: 'mod-cta'});
 			closeBtn.onclick = () => this.close();
 		}
@@ -3703,7 +3721,7 @@ class BulkResultsModal extends Modal {
 		for (const url of urls) {
 			await this.handleDuplicateAction(url, action);
 			// Small delay between processing
-			await new Promise(resolve => setTimeout(resolve, 100));
+			await new Promise(resolve => window.setTimeout(resolve, 100));
 		}
 		
 		if (this.duplicates.length === 0) {
@@ -3845,7 +3863,7 @@ class SingleTranscriptionToast {
 	}
 
 	animateProgress() {
-		const interval = setInterval(() => {
+		const interval = window.setInterval(() => {
 			const elapsed = (Date.now() - this.startTime) / 1000;
 			if (this.timeText) {
 				this.timeText.textContent = ` (${elapsed.toFixed(1)}s)`;
@@ -3861,7 +3879,7 @@ class SingleTranscriptionToast {
 		}, 1000);
 
 		// Store interval for cleanup
-		(this.toastElement as HTMLElement & {_interval?: NodeJS.Timeout})._interval = interval;
+		(this.toastElement as HTMLElement & {_interval?: number})._interval = interval;
 	}
 
 	updateStatus(status: string, timeElapsed?: number) {
@@ -3888,15 +3906,15 @@ class SingleTranscriptionToast {
 		// Clean up interval
 		const elementWithInterval = this.toastElement as HTMLElement & {_interval?: NodeJS.Timeout};
 		if (elementWithInterval._interval) {
-			clearInterval(elementWithInterval._interval);
+			window.clearInterval(elementWithInterval._interval);
 		}
 	}
 
 	autoHide(delay: number) {
-		setTimeout(() => {
+		window.setTimeout(() => {
 			if (this.toastElement) {
 				this.toastElement.style.opacity = '0';
-				setTimeout(() => {
+				window.setTimeout(() => {
 					if (this.toastElement) {
 						this.toastElement.remove();
 					}
@@ -3973,80 +3991,78 @@ class TikTokReviewView extends ItemView {
 	async onOpen() {
 		const container = this.containerEl.children[1];
 		container.empty();
-		container.addClass('tiktok-review-container');
+		container.addClass('tiktoker-review-container');
 
-		// Add CSS styles
-		this.addStyles();
 
 		// Create main container
-		this.containerDiv = container.createDiv({ cls: 'tiktok-review-content' });
+		this.containerDiv = container.createDiv({ cls: 'tiktoker-review-content' });
 
 		// Apply layout class based on settings
-		const layoutClass = this.plugin.settings.reviewQueueButtonLayout === 'sticky-footer' ? 'tiktok-review-layout-sticky' :
-		                    this.plugin.settings.reviewQueueButtonLayout === 'scroll-container' ? 'tiktok-review-layout-scroll' :
-		                    'tiktok-review-layout-floating';
+		const layoutClass = this.plugin.settings.reviewQueueButtonLayout === 'sticky-footer' ? 'tiktoker-review-layout-sticky' :
+		                    this.plugin.settings.reviewQueueButtonLayout === 'scroll-container' ? 'tiktoker-review-layout-scroll' :
+		                    'tiktoker-review-layout-floating';
 		this.containerDiv.addClass(layoutClass);
 
 		// Header
 		const header = this.containerDiv.createEl('h4', {
 			text: 'TikTok Review Queue',
-			cls: 'tiktok-review-header'
+			cls: 'tiktoker-review-header'
 		});
 
 		// Progress bar (if enabled)
 		if (this.plugin.settings.reviewQueueShowProgressBar) {
-			this.progressBarDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-progress-bar' });
-			const progressFill = this.progressBarDiv.createDiv({ cls: 'tiktok-review-progress-fill' });
+			this.progressBarDiv = this.containerDiv.createDiv({ cls: 'tiktoker-review-progress-bar' });
+			const progressFill = this.progressBarDiv.createDiv({ cls: 'tiktoker-review-progress-fill' });
 		}
 
 		// Session Management UI
-		const sessionDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-session-container' });
+		const sessionDiv = this.containerDiv.createDiv({ cls: 'tiktoker-review-session-container' });
 
 		// Session dropdown and controls
-		const sessionControlsDiv = sessionDiv.createDiv({ cls: 'tiktok-review-session-controls' });
-		sessionControlsDiv.createEl('span', { text: 'Session: ', cls: 'tiktok-review-session-label' });
+		const sessionControlsDiv = sessionDiv.createDiv({ cls: 'tiktoker-review-session-controls' });
+		sessionControlsDiv.createEl('span', { text: 'Session: ', cls: 'tiktoker-review-session-label' });
 
-		this.sessionDropdown = sessionControlsDiv.createEl('select', { cls: 'dropdown' });
+		this.sessionDropdown = sessionControlsDiv.createEl('select', { cls: 'tiktoker-dropdown' });
 		this.updateSessionDropdown();
 		this.sessionDropdown.addEventListener('change', async () => {
 			await this.switchSession(this.sessionDropdown.value);
 		});
 
-		const manageSessionBtn = sessionControlsDiv.createEl('button', { text: '⚙️', cls: 'tiktok-review-manage-btn' });
+		const manageSessionBtn = sessionControlsDiv.createEl('button', { text: '⚙️', cls: 'tiktoker-review-manage-btn' });
 		manageSessionBtn.title = 'Manage Sessions';
 		manageSessionBtn.addEventListener('click', () => this.openSessionManagementModal());
 
 		if (this.plugin.settings.reviewQueueEnableDataview) {
-			const dataviewBtn = sessionControlsDiv.createEl('button', { text: '📋', cls: 'tiktok-review-manage-btn' });
+			const dataviewBtn = sessionControlsDiv.createEl('button', { text: '📋', cls: 'tiktoker-review-manage-btn' });
 			dataviewBtn.title = 'Insert Dataview to Current Note';
 			dataviewBtn.addEventListener('click', () => this.insertDataviewToCurrentNote());
 		}
 
 		// Session info display
-		this.sessionInfoDiv = sessionDiv.createDiv({ cls: 'tiktok-review-session-info' });
+		this.sessionInfoDiv = sessionDiv.createDiv({ cls: 'tiktoker-review-session-info' });
 
 		// Filter inputs
-		const filtersInputDiv = sessionDiv.createDiv({ cls: 'tiktok-review-filter-inputs' });
+		const filtersInputDiv = sessionDiv.createDiv({ cls: 'tiktoker-review-filter-inputs' });
 
-		const hashtagGroup = filtersInputDiv.createDiv({ cls: 'tiktok-review-filter-group' });
-		hashtagGroup.createEl('label', { text: 'Hashtag:', cls: 'tiktok-review-filter-input-label' });
+		const hashtagGroup = filtersInputDiv.createDiv({ cls: 'tiktoker-review-filter-group' });
+		hashtagGroup.createEl('label', { text: 'Hashtag:', cls: 'tiktoker-review-filter-input-label' });
 		this.hashtagFilterInput = hashtagGroup.createEl('input', {
 			type: 'text',
 			placeholder: 'e.g., manifest',
-			cls: 'tiktok-review-filter-input'
+			cls: 'tiktoker-review-filter-input'
 		});
 		this.hashtagFilterInput.addEventListener('input', () => this.onFilterChange());
 
-		const textGroup = filtersInputDiv.createDiv({ cls: 'tiktok-review-filter-group' });
-		textGroup.createEl('label', { text: 'Text:', cls: 'tiktok-review-filter-input-label' });
+		const textGroup = filtersInputDiv.createDiv({ cls: 'tiktoker-review-filter-group' });
+		textGroup.createEl('label', { text: 'Text:', cls: 'tiktoker-review-filter-input-label' });
 		this.textFilterInput = textGroup.createEl('input', {
 			type: 'text',
 			placeholder: 'e.g., history',
-			cls: 'tiktok-review-filter-input'
+			cls: 'tiktoker-review-filter-input'
 		});
 		this.textFilterInput.addEventListener('input', () => this.onFilterChange());
 
-		const filterButtonsDiv = filtersInputDiv.createDiv({ cls: 'tiktok-review-filter-buttons' });
+		const filterButtonsDiv = filtersInputDiv.createDiv({ cls: 'tiktoker-review-filter-buttons' });
 
 		const saveSessionBtn = filterButtonsDiv.createEl('button', { text: 'Save Session', cls: 'mod-cta' });
 		saveSessionBtn.addEventListener('click', () => this.saveCurrentSession());
@@ -4058,11 +4074,11 @@ class TikTokReviewView extends ItemView {
 		resetSessionBtn.addEventListener('click', () => this.resetCurrentSession());
 
 		// Combined Filter checkboxes and Sort controls
-		const filterDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-filter' });
+		const filterDiv = this.containerDiv.createDiv({ cls: 'tiktoker-review-filter' });
 
-		const filterLabel = filterDiv.createEl('span', { text: 'Show: ', cls: 'tiktok-review-filter-label' });
+		const filterLabel = filterDiv.createEl('span', { text: 'Show: ', cls: 'tiktoker-review-filter-label' });
 
-		const filtersContainer = filterDiv.createDiv({ cls: 'tiktok-review-filter-checkboxes' });
+		const filtersContainer = filterDiv.createDiv({ cls: 'tiktoker-review-filter-checkboxes' });
 
 		this.createFilterCheckbox(filtersContainer, 'Unwatched', this.filterUnwatched, async (val) => {
 			this.filterUnwatched = val;
@@ -4089,8 +4105,8 @@ class TikTokReviewView extends ItemView {
 		});
 
 		// Sort dropdown with new options
-		const sortLabel = filterDiv.createEl('span', { text: 'Sort: ', cls: 'tiktok-review-sort-label' });
-		const sortToggle = filterDiv.createEl('select', { cls: 'dropdown' });
+		const sortLabel = filterDiv.createEl('span', { text: 'Sort: ', cls: 'tiktoker-review-sort-label' });
+		const sortToggle = filterDiv.createEl('select', { cls: 'tiktoker-dropdown' });
 		sortToggle.createEl('option', { text: 'Newest First', value: 'created-desc' });
 		sortToggle.createEl('option', { text: 'Oldest First', value: 'created-asc' });
 		sortToggle.createEl('option', { text: 'By Author', value: 'author' });
@@ -4105,19 +4121,19 @@ class TikTokReviewView extends ItemView {
 
 		// Wrap scrollable content if using scroll-container layout
 		const scrollableWrapper = this.plugin.settings.reviewQueueButtonLayout === 'scroll-container' ?
-			this.containerDiv.createDiv({ cls: 'tiktok-review-scrollable' }) : this.containerDiv;
+			this.containerDiv.createDiv({ cls: 'tiktoker-review-scrollable' }) : this.containerDiv;
 
 		// Metadata (title, author, date) - BEFORE embed
-		this.metadataDiv = scrollableWrapper.createDiv({ cls: 'tiktok-review-metadata' });
+		this.metadataDiv = scrollableWrapper.createDiv({ cls: 'tiktoker-review-metadata' });
 
 		// Embed container - AFTER metadata
-		this.embedDiv = scrollableWrapper.createDiv({ cls: 'tiktok-review-embed' });
+		this.embedDiv = scrollableWrapper.createDiv({ cls: 'tiktoker-review-embed' });
 
 		// Hashtags section
-		this.hashtagsDiv = scrollableWrapper.createDiv({ cls: 'tiktok-review-hashtags' });
+		this.hashtagsDiv = scrollableWrapper.createDiv({ cls: 'tiktoker-review-hashtags' });
 
 		// Note content toggle, edit toggle, and open button container
-		const noteButtonsDiv = scrollableWrapper.createDiv({ cls: 'tiktok-review-note-buttons' });
+		const noteButtonsDiv = scrollableWrapper.createDiv({ cls: 'tiktoker-review-note-buttons' });
 		const toggleButton = noteButtonsDiv.createEl('button', {
 			text: '▼ Show Note Content',
 			cls: 'mod-cta'
@@ -4130,7 +4146,7 @@ class TikTokReviewView extends ItemView {
 
 		const editToggleButton = noteButtonsDiv.createEl('button', {
 			text: 'Edit',
-			cls: 'tiktok-review-edit-toggle'
+			cls: 'tiktoker-review-edit-toggle'
 		});
 		editToggleButton.addEventListener('click', () => {
 			this.editableContent = !this.editableContent;
@@ -4140,21 +4156,21 @@ class TikTokReviewView extends ItemView {
 
 		const openTabButton = noteButtonsDiv.createEl('button', {
 			text: '↗',
-			cls: 'tiktok-review-open-tab'
+			cls: 'tiktoker-review-open-tab'
 		});
 		openTabButton.addEventListener('click', () => {
 			this.openCurrentInTab();
 		});
 
 		// Note content (collapsible)
-		this.noteContentDiv = scrollableWrapper.createDiv({ cls: 'tiktok-review-note-content' });
+		this.noteContentDiv = scrollableWrapper.createDiv({ cls: 'tiktoker-review-note-content' });
 		this.noteContentDiv.style.display = 'none';
 
 		// Quick Notes section
-		this.quickNotesDiv = scrollableWrapper.createDiv({ cls: 'tiktok-review-quick-notes' });
-		this.quickNotesDiv.createEl('label', { text: 'Quick Note:', cls: 'tiktok-review-quick-notes-label' });
+		this.quickNotesDiv = scrollableWrapper.createDiv({ cls: 'tiktoker-review-quick-notes' });
+		this.quickNotesDiv.createEl('label', { text: 'Quick Note:', cls: 'tiktoker-review-quick-notes-label' });
 		this.quickNotesTextarea = this.quickNotesDiv.createEl('textarea', {
-			cls: 'tiktok-review-quick-notes-textarea',
+			cls: 'tiktoker-review-quick-notes-textarea',
 			attr: { placeholder: 'Add a note about this TikTok...' }
 		});
 		this.addNoteButton = this.quickNotesDiv.createEl('button', {
@@ -4164,371 +4180,27 @@ class TikTokReviewView extends ItemView {
 		this.addNoteButton.addEventListener('click', () => this.addQuickNote());
 
 		// Queue counter
-		this.queueCounterDiv = this.containerDiv.createDiv({ cls: 'tiktok-review-counter' });
+		this.queueCounterDiv = this.containerDiv.createDiv({ cls: 'tiktoker-review-counter' });
 
 		// Controls wrapper
-		const controlsWrapper = this.containerDiv.createDiv({ cls: 'tiktok-review-controls-wrapper' });
+		const controlsWrapper = this.containerDiv.createDiv({ cls: 'tiktoker-review-controls-wrapper' });
 
 		// Navigation controls section
-		const navLabel = controlsWrapper.createEl('div', { text: 'Navigation:', cls: 'tiktok-review-section-label' });
-		this.navControlsDiv = controlsWrapper.createDiv({ cls: 'tiktok-review-nav-controls' });
+		const navLabel = controlsWrapper.createEl('div', { text: 'Navigation:', cls: 'tiktoker-review-section-label' });
+		this.navControlsDiv = controlsWrapper.createDiv({ cls: 'tiktoker-review-nav-controls' });
 
 		// Status controls section
-		const statusLabel = controlsWrapper.createEl('div', { text: 'Status:', cls: 'tiktok-review-section-label' });
-		this.statusControlsDiv = controlsWrapper.createDiv({ cls: 'tiktok-review-status-controls' });
+		const statusLabel = controlsWrapper.createEl('div', { text: 'Status:', cls: 'tiktoker-review-section-label' });
+		this.statusControlsDiv = controlsWrapper.createDiv({ cls: 'tiktoker-review-status-controls' });
 
 		// Undo button
-		this.undoButtonDiv = controlsWrapper.createDiv({ cls: 'tiktok-review-undo-container' });
+		this.undoButtonDiv = controlsWrapper.createDiv({ cls: 'tiktoker-review-undo-container' });
 
 		this.createControls();
 
 		// Load and render first TikTok
 		await this.loadQueue();
 		await this.renderCurrentTikTok();
-	}
-
-	addStyles() {
-		// Add inline styles for the review view
-		const style = document.createElement('style');
-		style.textContent = `
-			.tiktok-review-container {
-				padding: 0;
-				height: 100%;
-				overflow: auto;
-			}
-			.tiktok-review-content {
-				padding: 16px;
-			}
-			.tiktok-review-header {
-				margin: 0 0 12px 0;
-				text-align: center;
-			}
-			.tiktok-review-progress-bar {
-				width: 100%;
-				height: 4px;
-				background: var(--background-modifier-border);
-				border-radius: 2px;
-				margin-bottom: 12px;
-				overflow: hidden;
-			}
-			.tiktok-review-progress-fill {
-				height: 100%;
-				background: var(--interactive-accent);
-				transition: width 0.3s ease;
-			}
-			.tiktok-review-session-container {
-				margin-bottom: 16px;
-				padding: 12px;
-				background: var(--background-secondary);
-				border-radius: 4px;
-				border: 1px solid var(--background-modifier-border);
-			}
-			.tiktok-review-session-controls {
-				display: flex;
-				align-items: center;
-				gap: 8px;
-				margin-bottom: 12px;
-			}
-			.tiktok-review-session-label {
-				font-weight: 600;
-				font-size: 0.9em;
-			}
-			.tiktok-review-session-controls select {
-				flex: 1;
-				max-width: 250px;
-			}
-			.tiktok-review-manage-btn {
-				padding: 4px 8px;
-				font-size: 1.1em;
-			}
-			.tiktok-review-session-info {
-				margin-bottom: 12px;
-				font-size: 0.85em;
-				color: var(--text-muted);
-			}
-			.tiktok-review-session-stats {
-				font-weight: 500;
-			}
-			.tiktok-review-filter-inputs {
-				display: flex;
-				flex-direction: row;
-				gap: 12px;
-				flex-wrap: wrap;
-			}
-			.tiktok-review-filter-group {
-				display: flex;
-				align-items: center;
-				gap: 8px;
-				flex: 1;
-				min-width: 200px;
-			}
-			.tiktok-review-filter-input-label {
-				font-weight: 600;
-				font-size: 0.85em;
-				min-width: 65px;
-			}
-			.tiktok-review-filter-input {
-				flex: 1;
-				padding: 4px 8px;
-				border: 1px solid var(--background-modifier-border);
-				border-radius: 4px;
-				background: var(--background-primary);
-				font-size: 0.9em;
-			}
-			.tiktok-review-filter-buttons {
-				display: flex;
-				gap: 6px;
-				margin-top: 8px;
-			}
-			.tiktok-review-filter-buttons button {
-				flex: 1;
-				padding: 6px 12px;
-				font-size: 0.85em;
-			}
-			.tiktok-review-filter {
-				margin-bottom: 12px;
-				display: flex;
-				align-items: center;
-				gap: 8px;
-				flex-wrap: wrap;
-			}
-			.tiktok-review-filter-label {
-				font-weight: 600;
-				font-size: 0.9em;
-			}
-			.tiktok-review-filter-checkboxes {
-				display: flex;
-				gap: 12px;
-				flex-wrap: wrap;
-			}
-			.tiktok-review-filter-checkbox {
-				display: flex;
-				align-items: center;
-				gap: 4px;
-			}
-			.tiktok-review-filter-checkbox input[type="checkbox"] {
-				cursor: pointer;
-			}
-			.tiktok-review-filter-checkbox label {
-				cursor: pointer;
-				font-size: 0.9em;
-			}
-			.tiktok-review-sort-label {
-				margin-left: 8px;
-			}
-			.tiktok-review-embed {
-				width: 100%;
-				min-width: 325px;
-				min-height: 400px;
-				margin: 0 auto 12px auto;
-				border: 1px solid var(--background-modifier-border);
-				border-radius: 4px;
-				overflow: hidden;
-				position: relative;
-				resize: both;
-				display: flex;
-				align-items: center;
-				justify-content: center;
-			}
-			.tiktok-review-embed iframe {
-				width: 100%;
-				height: 100%;
-				min-height: 400px;
-				border: none;
-			}
-			.tiktok-review-metadata {
-				padding: 8px;
-				margin-bottom: 12px;
-				background: var(--background-secondary);
-				border-radius: 4px;
-				font-size: 0.9em;
-			}
-			.tiktok-review-hashtags {
-				padding: 8px;
-				margin-bottom: 12px;
-				background: var(--background-secondary);
-				border-radius: 4px;
-				display: flex;
-				flex-wrap: wrap;
-				gap: 6px;
-			}
-			.tiktok-review-hashtag {
-				display: inline-block;
-				padding: 4px 8px;
-				background: var(--interactive-accent);
-				color: var(--text-on-accent);
-				border-radius: 12px;
-				font-size: 0.85em;
-				font-weight: 500;
-				cursor: pointer;
-				transition: opacity 0.2s;
-			}
-			.tiktok-review-hashtag:hover {
-				opacity: 0.8;
-			}
-			.tiktok-review-note-buttons {
-				display: flex;
-				gap: 8px;
-				margin-bottom: 12px;
-			}
-			.tiktok-review-note-buttons button:first-child {
-				flex: 1;
-			}
-			.tiktok-review-open-tab {
-				width: 60px;
-				text-align: center;
-				font-size: 1.1em;
-			}
-			.tiktok-review-note-content {
-				padding: 12px;
-				margin-bottom: 12px;
-				background: var(--background-secondary);
-				border-radius: 4px;
-				max-height: 300px;
-				overflow-y: auto;
-				font-size: 0.85em;
-			}
-			.tiktok-review-counter {
-				text-align: center;
-				margin-bottom: 12px;
-				font-weight: 600;
-			}
-			.tiktok-review-section-label {
-				font-size: 0.9em;
-				font-weight: 600;
-				margin-bottom: 8px;
-				margin-top: 12px;
-				color: var(--text-muted);
-			}
-			.tiktok-review-nav-controls {
-				display: flex;
-				gap: 8px;
-				margin-bottom: 12px;
-				padding: 0 4px;
-			}
-			.tiktok-review-nav-controls button {
-				flex: 1;
-				padding: 8px;
-			}
-			.tiktok-review-status-controls {
-				display: grid;
-				grid-template-columns: 1fr 1fr;
-				gap: 8px;
-				margin-bottom: 12px;
-				padding: 0 4px;
-			}
-			.tiktok-review-status-controls button {
-				padding: 8px;
-			}
-			.tiktok-review-status-controls button.is-active {
-				background: var(--interactive-accent);
-				color: var(--text-on-accent);
-			}
-			.tiktok-review-status-controls button.with-transition {
-				transition: background-color 0.3s ease, color 0.3s ease;
-			}
-			.tiktok-review-edit-toggle {
-				min-width: 60px;
-			}
-			.tiktok-review-quick-notes {
-				margin-bottom: 12px;
-				padding: 12px;
-				background: var(--background-secondary);
-				border-radius: 4px;
-			}
-			.tiktok-review-quick-notes-label {
-				display: block;
-				font-weight: 600;
-				font-size: 0.9em;
-				margin-bottom: 8px;
-			}
-			.tiktok-review-quick-notes-textarea {
-				width: 100%;
-				min-height: 80px;
-				padding: 8px;
-				margin-bottom: 8px;
-				background: var(--background-primary);
-				border: 1px solid var(--background-modifier-border);
-				border-radius: 4px;
-				font-family: var(--font-monospace);
-				font-size: 0.9em;
-				resize: vertical;
-			}
-			.tiktok-review-content-editor {
-				width: 100%;
-				min-height: 200px;
-				padding: 8px;
-				margin-bottom: 8px;
-				background: var(--background-primary);
-				border: 1px solid var(--background-modifier-border);
-				border-radius: 4px;
-				font-family: var(--font-monospace);
-				font-size: 0.9em;
-				resize: vertical;
-			}
-			.tiktok-review-save-button {
-				width: 100%;
-			}
-			.tiktok-review-undo-container {
-				margin-top: 8px;
-			}
-			.tiktok-review-undo-container button {
-				width: 100%;
-				padding: 6px;
-				font-size: 0.9em;
-			}
-			.tiktok-review-empty {
-				text-align: center;
-				padding: 40px 20px;
-				color: var(--text-muted);
-			}
-
-			/* Layout Option A: Sticky Footer */
-			.tiktok-review-layout-sticky .tiktok-review-controls-wrapper {
-				position: sticky;
-				bottom: 0;
-				background: var(--background-primary);
-				padding: 12px 0 0 0;
-				border-top: 2px solid var(--background-modifier-border);
-				z-index: 10;
-				box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.1);
-			}
-
-			/* Layout Option B: Scroll Container */
-			.tiktok-review-layout-scroll .tiktok-review-scrollable {
-				max-height: calc(100vh - 400px);
-				overflow-y: auto;
-				margin-bottom: 12px;
-				padding-right: 8px;
-			}
-			.tiktok-review-layout-scroll .tiktok-review-controls-wrapper {
-				padding-top: 12px;
-				border-top: 2px solid var(--background-modifier-border);
-			}
-
-			/* Layout Option C: Floating Action Bar */
-			.tiktok-review-layout-floating .tiktok-review-controls-wrapper {
-				position: fixed;
-				bottom: 20px;
-				right: 20px;
-				left: auto;
-				width: 280px;
-				background: var(--background-primary);
-				padding: 12px;
-				border: 2px solid var(--interactive-accent);
-				border-radius: 8px;
-				box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-				z-index: 100;
-			}
-			.tiktok-review-layout-floating .tiktok-review-controls-wrapper:hover {
-				box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
-			}
-			.tiktok-review-layout-floating .tiktok-review-nav-controls,
-			.tiktok-review-layout-floating .tiktok-review-status-controls {
-				margin-bottom: 8px;
-			}
-		`;
-		document.head.appendChild(style);
 	}
 
 	createControls() {
@@ -4559,7 +4231,7 @@ class TikTokReviewView extends ItemView {
 	}
 
 	createFilterCheckbox(container: HTMLElement, label: string, checked: boolean, onChange: (val: boolean) => void): HTMLElement {
-		const checkboxContainer = container.createDiv({ cls: 'tiktok-review-filter-checkbox' });
+		const checkboxContainer = container.createDiv({ cls: 'tiktoker-review-filter-checkbox' });
 		const checkbox = checkboxContainer.createEl('input', { type: 'checkbox' });
 		checkbox.checked = checked;
 		checkbox.addEventListener('change', () => onChange(checkbox.checked));
@@ -4581,14 +4253,14 @@ class TikTokReviewView extends ItemView {
 		if (!this.containerDiv) return;
 
 		// Remove all existing layout classes
-		this.containerDiv.removeClass('tiktok-review-layout-sticky');
-		this.containerDiv.removeClass('tiktok-review-layout-scroll');
-		this.containerDiv.removeClass('tiktok-review-layout-floating');
+		this.containerDiv.removeClass('tiktoker-review-layout-sticky');
+		this.containerDiv.removeClass('tiktoker-review-layout-scroll');
+		this.containerDiv.removeClass('tiktoker-review-layout-floating');
 
 		// Apply the new layout class based on current settings
-		const layoutClass = this.plugin.settings.reviewQueueButtonLayout === 'sticky-footer' ? 'tiktok-review-layout-sticky' :
-		                    this.plugin.settings.reviewQueueButtonLayout === 'scroll-container' ? 'tiktok-review-layout-scroll' :
-		                    'tiktok-review-layout-floating';
+		const layoutClass = this.plugin.settings.reviewQueueButtonLayout === 'sticky-footer' ? 'tiktoker-review-layout-sticky' :
+		                    this.plugin.settings.reviewQueueButtonLayout === 'scroll-container' ? 'tiktoker-review-layout-scroll' :
+		                    'tiktoker-review-layout-floating';
 		this.containerDiv.addClass(layoutClass);
 	}
 
@@ -4772,7 +4444,7 @@ class TikTokReviewView extends ItemView {
 		if (this.queue.length === 0) {
 			this.embedDiv.empty();
 			this.embedDiv.createDiv({
-				cls: 'tiktok-review-empty',
+				cls: 'tiktoker-review-empty',
 				text: 'No TikToks match the current filters.'
 			});
 			this.metadataDiv.empty();
@@ -4782,7 +4454,7 @@ class TikTokReviewView extends ItemView {
 		}
 
 		const currentFile = this.queue[this.currentIndex];
-		const content = await this.app.vault.read(currentFile);
+		const content = await this.app.vault.cachedRead(currentFile);
 
 		// Extract iframe from content - support both iframe and blockquote formats
 		let iframeMatch = content.match(/<iframe[^>]*src="https:\/\/www\.tiktok\.com\/embed\/v2\/[^"]*"[^>]*><\/iframe>/);
@@ -4812,7 +4484,7 @@ class TikTokReviewView extends ItemView {
 		this.metadataDiv.empty();
 		this.metadataDiv.createEl('div', {
 			text: currentFile.basename,
-			cls: 'tiktok-review-title'
+			cls: 'tiktoker-review-title'
 		});
 
 		// Show hashtags
@@ -4831,7 +4503,7 @@ class TikTokReviewView extends ItemView {
 					const cleanTag = tag.replace('#', '');
 					const hashtagEl = this.hashtagsDiv.createEl('span', {
 						text: `#${cleanTag}`,
-						cls: 'tiktok-review-hashtag'
+						cls: 'tiktoker-review-hashtag'
 					});
 					hashtagEl.addEventListener('click', () => {
 						// Open tag search in left sidebar
@@ -4863,7 +4535,7 @@ class TikTokReviewView extends ItemView {
 		if (this.queue.length === 0) return;
 
 		const currentFile = this.queue[this.currentIndex];
-		const content = await this.app.vault.read(currentFile);
+		const content = await this.app.vault.cachedRead(currentFile);
 
 		// Extract Description and Transcription sections
 		let displayContent = content.replace(/^---[\s\S]*?---\n/, '');
@@ -4883,7 +4555,7 @@ class TikTokReviewView extends ItemView {
 		if (this.editableContent) {
 			// Show editable textarea
 			const textarea = this.noteContentDiv.createEl('textarea', {
-				cls: 'tiktok-review-content-editor',
+				cls: 'tiktoker-review-content-editor',
 				value: contentToRender
 			});
 
@@ -4922,7 +4594,7 @@ class TikTokReviewView extends ItemView {
 			});
 		} else {
 			// Show rendered markdown
-			const contentDiv = this.noteContentDiv.createEl('div', { cls: 'tiktok-review-editable-content' });
+			const contentDiv = this.noteContentDiv.createEl('div', { cls: 'tiktoker-review-editable-content' });
 			await MarkdownRenderer.renderMarkdown(contentToRender, contentDiv, currentFile.path, this);
 		}
 	}
@@ -5260,12 +4932,12 @@ class TikTokReviewView extends ItemView {
 
 			this.sessionInfoDiv.createEl('span', {
 				text: `Active: ${this.activeSession.name} | ${reviewed} reviewed`,
-				cls: 'tiktok-review-session-stats'
+				cls: 'tiktoker-review-session-stats'
 			});
 		} else if (this.hashtagFilter || this.textFilter) {
 			this.sessionInfoDiv.createEl('span', {
 				text: 'Temporary filter active (not saved)',
-				cls: 'tiktok-review-session-stats'
+				cls: 'tiktoker-review-session-stats'
 			});
 		}
 	}
@@ -5391,10 +5063,10 @@ class TikTokReviewView extends ItemView {
 	async onFilterChange() {
 		// Debounce filter changes
 		if ((this as any).filterTimeout) {
-			clearTimeout((this as any).filterTimeout);
+			window.clearTimeout((this as any).filterTimeout);
 		}
 
-		(this as any).filterTimeout = setTimeout(async () => {
+		(this as any).filterTimeout = window.setTimeout(async () => {
 			this.hashtagFilter = this.hashtagFilterInput.value.trim();
 			this.textFilter = this.textFilterInput.value.trim();
 
@@ -5481,7 +5153,7 @@ ${whereClause}
 			const modal = new Modal(this.app);
 			modal.contentEl.createEl('p', { text: message });
 
-			const buttonDiv = modal.contentEl.createDiv({ cls: 'modal-button-container' });
+			const buttonDiv = modal.contentEl.createDiv({ cls: 'tiktoker-modal-button-container' });
 			buttonDiv.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;';
 
 			const cancelBtn = buttonDiv.createEl('button', { text: 'Cancel' });
@@ -5537,7 +5209,7 @@ class SessionNameModal extends Modal {
 		this.nameInput.style.cssText = 'width: 100%; padding: 8px; border: 1px solid var(--background-modifier-border); border-radius: 4px; background-color: var(--background-primary);';
 
 		// Focus and select all text on open
-		setTimeout(() => {
+		window.setTimeout(() => {
 			this.nameInput.focus();
 			this.nameInput.select();
 		}, 10);
@@ -5550,7 +5222,7 @@ class SessionNameModal extends Modal {
 			}
 		});
 
-		const buttonContainer = contentEl.createDiv({cls: 'modal-button-container'});
+		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
 		buttonContainer.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end; gap: 8px;';
 
 		const cancelButton = buttonContainer.createEl('button', {text: 'Cancel'});
@@ -5606,7 +5278,7 @@ class SessionManagementModal extends Modal {
 			emptyMessage.style.cssText = 'padding: 20px; text-align: center; color: var(--text-muted);';
 			emptyMessage.textContent = 'No review sessions found.';
 
-			const closeButton = contentEl.createDiv({cls: 'modal-button-container'});
+			const closeButton = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
 			closeButton.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end;';
 			closeButton.createEl('button', {text: 'Close'}).onclick = () => this.close();
 			return;
@@ -5666,7 +5338,7 @@ class SessionManagementModal extends Modal {
 			sessionDetails.createDiv({text: `Created: ${created} | Last accessed: ${lastAccessed}`});
 		});
 
-		const buttonContainer = contentEl.createDiv({cls: 'modal-button-container'});
+		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
 		buttonContainer.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end;';
 
 		const closeButton = buttonContainer.createEl('button', {text: 'Close'});
@@ -5701,7 +5373,7 @@ class SessionManagementModal extends Modal {
 		confirmModal.contentEl.createEl('p', {text: `Are you sure you want to reset the session "${session.name}"?`});
 		confirmModal.contentEl.createEl('p', {text: 'This will clear all reviewed files and filters, but keep the session.'});
 
-		const buttonContainer = confirmModal.contentEl.createDiv({cls: 'modal-button-container'});
+		const buttonContainer = confirmModal.contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
 		buttonContainer.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end; gap: 8px;';
 
 		const cancelButton = buttonContainer.createEl('button', {text: 'Cancel'});
@@ -5746,7 +5418,7 @@ class SessionManagementModal extends Modal {
 			cls: 'mod-warning'
 		}).style.cssText = 'color: var(--text-error); font-weight: 500;';
 
-		const buttonContainer = confirmModal.contentEl.createDiv({cls: 'modal-button-container'});
+		const buttonContainer = confirmModal.contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
 		buttonContainer.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end; gap: 8px;';
 
 		const cancelButton = buttonContainer.createEl('button', {text: 'Cancel'});

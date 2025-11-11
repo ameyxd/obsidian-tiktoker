@@ -86,7 +86,7 @@ export class ScriptInstallationModal extends Modal {
 		installInfo.createEl('p', { text: 'Installing transcription scripts...' });
 
 		// Progress bar container
-		const progressContainer = installInfo.createDiv({ cls: 'progress-container' });
+		const progressContainer = installInfo.createDiv({ cls: 'tiktoker-progress-container' });
 		progressContainer.style.cssText = 'margin: 20px 0;';
 
 		const progressWrapper = progressContainer.createDiv();

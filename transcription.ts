@@ -529,6 +529,7 @@ export class SingleTranscriptionModal extends Modal {
 	service: TranscriptionService;
 	content: HTMLDivElement | null = null;
 	minimizeBtn: HTMLButtonElement | null = null;
+	shouldAllowClose: boolean = false;
 
 	constructor(app: App, fileName: string, data: any, service: TranscriptionService) {
 		super(app);
@@ -586,7 +587,7 @@ export class SingleTranscriptionModal extends Modal {
 		this.content = content;
 		this.minimizeBtn = minimizeBtn;
 
-		const transcriptionSection = content.createDiv({cls: 'transcription-section'});
+		const transcriptionSection = content.createDiv({cls: 'tiktoker-transcription-section'});
 		transcriptionSection.createEl('h4', {text: 'Transcription'}).style.margin = '0 0 8px 0';
 
 		const statusLine = transcriptionSection.createDiv();
@@ -628,15 +629,18 @@ export class SingleTranscriptionModal extends Modal {
 		};
 
 		this.startProgressTracking();
+	}
 
-		// Add backdrop click handler to minimize instead of close
-		this.containerEl.addEventListener('click', (e) => {
-			if (e.target === this.containerEl && !this.isMinimized) {
-				e.stopPropagation();
-				e.preventDefault();
-				this.toggleMinimize(content, minimizeBtn);
+	close() {
+		// Only allow actual close if transcription is complete/failed or explicitly requested
+		if (this.shouldAllowClose) {
+			super.close();
+		} else {
+			// Minimize instead when user clicks backdrop
+			if (this.content && this.minimizeBtn && !this.isMinimized) {
+				this.toggleMinimize(this.content, this.minimizeBtn);
 			}
-		});
+		}
 	}
 
 	toggleMinimize(content: HTMLDivElement, button: HTMLButtonElement) {
@@ -686,7 +690,7 @@ export class SingleTranscriptionModal extends Modal {
 	}
 
 	startProgressTracking() {
-		this.interval = setInterval(() => {
+		this.interval = window.setInterval(() => {
 			if (this.timeText) {
 				const elapsed = (Date.now() - this.startTime) / 1000;
 				this.timeText.textContent = `${elapsed.toFixed(1)}s`;
@@ -715,8 +719,9 @@ export class SingleTranscriptionModal extends Modal {
 				this.progressBar.style.width = '100%';
 				this.statusText.style.color = 'var(--text-success)';
 
-				setTimeout(() => {
+				window.setTimeout(() => {
 					if (this.service && this.service.activeTranscriptionModal === this) {
+						this.shouldAllowClose = true;
 						this.close();
 					}
 				}, 5000);
@@ -724,8 +729,9 @@ export class SingleTranscriptionModal extends Modal {
 				this.progressBar.style.backgroundColor = 'var(--text-error)';
 				this.statusText.style.color = 'var(--text-error)';
 
-				setTimeout(() => {
+				window.setTimeout(() => {
 					if (this.service && this.service.activeTranscriptionModal === this) {
+						this.shouldAllowClose = true;
 						this.close();
 					}
 				}, 8000);
@@ -733,13 +739,13 @@ export class SingleTranscriptionModal extends Modal {
 		}
 
 		if ((status === 'Completed' || status === 'Failed') && this.interval) {
-			clearInterval(this.interval);
+			window.clearInterval(this.interval);
 		}
 	}
 
 	onClose() {
 		if (this.interval) {
-			clearInterval(this.interval);
+			window.clearInterval(this.interval);
 		}
 
 		if (this.service && this.service.activeTranscriptionModal === this) {
