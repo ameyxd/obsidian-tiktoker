@@ -1,9 +1,113 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer, Menu, MenuItem, stringifyYaml } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer, Menu, MenuItem, stringifyYaml, FileSystemAdapter, PluginManifest } from 'obsidian';
 import { TranscriptionService, TranscriptionSettings } from './transcription';
 import { ScriptInstaller } from './scriptInstaller';
 import { ScriptInstallationModal } from './scriptInstallationModal';
 
 const VIEW_TYPE_TIKTOK_REVIEW = 'tiktok-review-view';
+
+// TikTok data interface for oEmbed and processed data
+interface TikTokData {
+	author: string;
+	description: string;
+	hashtags: string[];
+	url: string;
+	expandedUrl: string;
+	embedHtml: string;
+	thumbnailUrl?: string;
+	videoId: string | null;
+	createdDate: string;
+	postedDate: string;
+	transcription: string;
+	oembedFailed?: boolean;
+	isSlideshow?: boolean;
+	isPrivate?: boolean;
+	mobileOptimized?: boolean;
+	shortUrlProcessed?: boolean;
+	shortUrlHandled?: boolean;
+	date?: string;
+}
+
+// oEmbed response from TikTok API
+interface TikTokOEmbedResponse {
+	author_name: string;
+	author_url: string;
+	title: string;
+	html: string;
+	thumbnail_url?: string;
+	thumbnail_width?: number;
+	thumbnail_height?: number;
+	provider_name: string;
+	provider_url: string;
+	type: string;
+	version: string;
+}
+
+// Dependency check status
+interface DependencyStatus {
+	python3: boolean;
+	ytdlp: boolean;
+	ffmpeg: boolean;
+	venv: boolean;
+	whisper: boolean;
+}
+
+// Bulk processing result types
+interface BulkSuccessResult {
+	url: string;
+	success: boolean;
+	fileName?: string;
+	noteTitle?: string;
+	filePath?: string;
+	data?: TikTokData;
+}
+
+interface BulkFailedResult {
+	url: string;
+	success: boolean;
+	error?: string;
+}
+
+interface BulkDuplicateResult {
+	url: string;
+	duplicate?: boolean;
+	fileName?: string;
+	noteTitle?: string;
+}
+
+interface BulkOEmbedFailedResult {
+	url: string;
+	success: boolean;
+	oembedFailed?: boolean;
+	fileName?: string;
+	noteTitle?: string;
+}
+
+interface BulkSlideshowResult {
+	url: string;
+	success: boolean;
+	isSlideshow?: boolean;
+	fileName?: string;
+	noteTitle?: string;
+}
+
+interface BulkPrivateResult {
+	url: string;
+	isPrivate?: boolean;
+}
+
+// Processing result union type
+interface ProcessingResult {
+	success: boolean;
+	duplicate?: boolean;
+	fileName?: string;
+	noteTitle?: string;
+	oembedFailed?: boolean;
+	isSlideshow?: boolean;
+	isPrivate?: boolean;
+	filePath?: string;
+	data?: TikTokData;
+	error?: string;
+}
 
 interface ReviewSession {
 	id: string;
@@ -145,9 +249,9 @@ export default class TikTokerPlugin extends Plugin {
 	settings: TikTokerSettings;
 	transcriptionService: TranscriptionService;
 
-	private debugLog(message: string, ...args: any[]): void {
+	private debugLog(message: string, ...args: unknown[]): void {
 		if (this.settings.debugMode) {
-			console.log(`TikToker Debug - ${message}`, ...args);
+			console.debug(`TikToker Debug - ${message}`, ...args);
 		}
 	}
 
@@ -156,10 +260,10 @@ export default class TikTokerPlugin extends Plugin {
 
 		// Verify whisper scripts exist (always check, not just when path is empty)
 		if (!Platform.isMobile) {
-			const path = require('path');
-			const fs = require('fs');
-			const vaultPath = (this.app.vault.adapter as any).basePath || '';
-			const pluginDir = (this.manifest as any).dir || '';
+			const path = window.require('path') as typeof import('path');
+			const fs = window.require('fs') as typeof import('fs');
+			const vaultPath = (this.app.vault.adapter as FileSystemAdapter & {basePath?: string}).basePath || '';
+			const pluginDir = (this.manifest as PluginManifest).dir || '';
 			const absolutePluginDir = path.join(vaultPath, pluginDir);
 
 			// Use existing path if set, otherwise try auto-detection
@@ -390,7 +494,7 @@ export default class TikTokerPlugin extends Plugin {
 
 	private extractTikTokUrls(text: string): string[] {
 		// Extract URLs using multiple methods to handle different formats
-		const urlPattern = /https?:\/\/(?:www\.)?(tiktok\.com|vm\.tiktok\.com)\/[^\s\]\)\"\'<>]+/gi;
+		const urlPattern = /https?:\/\/(?:www\.)?(tiktok\.com|vm\.tiktok\.com)\/[^\s\])"'<>]+/gi;
 		const matches = text.match(urlPattern) || [];
 		
 		// Deduplicate URLs
@@ -420,7 +524,11 @@ export default class TikTokerPlugin extends Plugin {
 			new Notice('Fetching TikTok data...');
 
 			const tikTokData = await this.fetchTikTokData(urlToProcess, false);
-			await this.createTikTokNote(tikTokData, false);
+			if (tikTokData) {
+				await this.createTikTokNote(tikTokData, false);
+			} else {
+				new Notice('Failed to fetch TikTok data');
+			}
 		} catch (error) {
 			new Notice('Failed to process TikTok URL');
 			console.error('TikToker URL processing error:', error);
@@ -449,27 +557,20 @@ export default class TikTokerPlugin extends Plugin {
 			const controller = new AbortController();
 			window.setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
 
-			// Use different request methods for desktop vs mobile due to CORS
-			const response = Platform.isMobile
-				? await this.makeHttpRequest(oembedUrl, {
-					signal: controller.signal,
-					headers: {
-						'User-Agent': 'Mozilla/5.0 (compatible; TikToker-Plugin/1.0)'
-					}
-				})
-				: await fetch(oembedUrl, {
-					method: 'GET',
-					signal: controller.signal,
-					headers: {
-						'User-Agent': 'Mozilla/5.0 (compatible; TikToker-Plugin/1.0)'
-					}
-				});
+			// Use Obsidian's requestUrl for both mobile and desktop
+			const response = await requestUrl({
+				url: oembedUrl,
+				method: 'GET',
+				headers: {
+					'User-Agent': 'Mozilla/5.0 (compatible; TikToker-Plugin/1.0)'
+				}
+			});
 
-			if (!response.ok) {
+			if (response.status !== 200) {
 				throw new Error(`oEmbed request failed: ${response.status}`);
 			}
 
-			const oembedData = await response.json();
+			const oembedData = response.json as TikTokOEmbedResponse;
 			this.debugLog('oEmbed success:', oembedData);
 			this.debugLog('oEmbed HTML:', oembedData.html);
 			
@@ -591,7 +692,7 @@ export default class TikTokerPlugin extends Plugin {
 				});
 
 				if (response.ok) {
-					const oembedData = await response.json();
+					const oembedData = await response.json() as TikTokOEmbedResponse;
 					this.debugLog('Mobile: oEmbed success on /t/ URL, extracting video ID');
 
 					if (oembedData.html) {
@@ -613,7 +714,7 @@ export default class TikTokerPlugin extends Plugin {
 					throw new Error(`oEmbed request failed: ${response.status}`);
 				}
 			} catch (error) {
-				this.debugLog('Mobile: oEmbed on /t/ URL failed:', error?.message);
+				this.debugLog('Mobile: oEmbed on /t/ URL failed:', error instanceof Error ? error.message : String(error));
 			}
 		}
 
@@ -645,7 +746,7 @@ export default class TikTokerPlugin extends Plugin {
 					throw new Error(`oEmbed request failed: ${response.status}`);
 				}
 
-				const oembedData = await response.json();
+				const oembedData = await response.json() as TikTokOEmbedResponse;
 				this.debugLog('Mobile: oEmbed success, extracting correct video ID');
 
 				if (oembedData.html) {
@@ -657,7 +758,7 @@ export default class TikTokerPlugin extends Plugin {
 					}
 				}
 			} catch (error) {
-				this.debugLog('Mobile: oEmbed on expanded URL failed:', error?.message);
+				this.debugLog('Mobile: oEmbed on expanded URL failed:', error instanceof Error ? error.message : String(error));
 			}
 		}
 
@@ -756,7 +857,7 @@ export default class TikTokerPlugin extends Plugin {
 		};
 	}
 
-	private async handleSlideshowUrl(url: string, videoId: string | null, isBulkProcessing: boolean): Promise<any> {
+	private async handleSlideshowUrl(url: string, videoId: string | null, isBulkProcessing: boolean): Promise<TikTokData> {
 		this.debugLog('Processing slideshow URL');
 		
 		// Try to extract basic info for the title
@@ -784,37 +885,37 @@ export default class TikTokerPlugin extends Plugin {
 		};
 	}
 
-	private detectPrivateVideo(error: any, url: string): boolean {
+	private detectPrivateVideo(error: Error | unknown, _url: string): boolean {
 		// Common indicators of private videos:
 		// - 403 Forbidden responses
 		// - 404 Not Found (sometimes used for private content)
 		// - Error messages containing "private" or "not available"
-		if (error && typeof error.message === 'string') {
+		if (error instanceof Error) {
 			const errorMessage = error.message.toLowerCase();
-			
+
 			// Check for HTTP status codes indicating private content
 			if (errorMessage.includes('403') || errorMessage.includes('forbidden')) {
 				return true;
 			}
-			
+
 			// Check for specific error messages
-			if (errorMessage.includes('private') || 
-				errorMessage.includes('not available') || 
+			if (errorMessage.includes('private') ||
+				errorMessage.includes('not available') ||
 				errorMessage.includes('access denied') ||
 				errorMessage.includes('restricted')) {
 				return true;
 			}
 		}
-		
-		// Also check the response status from fetch error
-		if (error && error.status === 403) {
+
+		// Also check the response status from fetch error (for fetch-like errors with status property)
+		if (error && typeof error === 'object' && 'status' in error && (error as {status: number}).status === 403) {
 			return true;
 		}
-		
+
 		return false;
 	}
 
-	private async handlePrivateVideo(url: string, videoId: string | null, isBulkProcessing: boolean): Promise<any> {
+	private async handlePrivateVideo(url: string, videoId: string | null, isBulkProcessing: boolean): Promise<TikTokData | null> {
 		const author = this.extractAuthorFromUrl(url);
 		const postedDate = await this.extractTikTokPostedDate(url, videoId);
 		
@@ -916,7 +1017,7 @@ export default class TikTokerPlugin extends Plugin {
 		return match ? `@${match[1]}` : 'Unknown';
 	}
 
-	private createObsidianCompatibleEmbed(oembedData: any, videoId: string | null, url: string): string {
+	private createObsidianCompatibleEmbed(oembedData: TikTokOEmbedResponse | null, videoId: string | null, url: string): string {
 		// EXACT ReadItLater approach - simple iframe like they use
 		if (videoId) {
 			const readItLaterStyle = `<iframe width="325" height="760" src="https://www.tiktok.com/embed/v2/${videoId}"></iframe>`;
@@ -980,19 +1081,18 @@ export default class TikTokerPlugin extends Plugin {
 				const controller = new AbortController();
 				window.setTimeout(() => controller.abort(), this.settings.urlTimeout * 1000);
 
-				// Use fetch (like desktop) to get proper redirect URL
-				const response = await fetch(url, {
+				// Use requestUrl to get proper redirect URL
+				const response = await requestUrl({
+					url: url,
 					method: 'GET',
-					redirect: 'follow',
-					signal: controller.signal,
 					headers: {
 						'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_6_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1',
 						'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
 					}
 				});
 
-				// Check the final redirected URL
-				const finalUrl = response.url;
+				// Check the final redirected URL (requestUrl follows redirects automatically)
+				const finalUrl = url; // requestUrl doesn't expose final URL, use the response text to find redirects
 				if (finalUrl && finalUrl !== url && this.isValidTikTokVideoUrl(finalUrl)) {
 					this.debugLog('Mobile: Successfully followed /t/ redirect to:', finalUrl);
 					return finalUrl;
@@ -1119,7 +1219,7 @@ export default class TikTokerPlugin extends Plugin {
 	}
 
 	// Enhanced data extraction for short URLs when standard expansion fails
-	private async extractDataFromShortUrl(originalUrl: string, expandedUrl: string): Promise<{success: boolean, data?: any}> {
+	private extractDataFromShortUrl(originalUrl: string, expandedUrl: string): {success: boolean, data?: TikTokData} {
 		this.debugLog('Attempting enhanced short URL data extraction');
 		
 		try {
@@ -1336,7 +1436,7 @@ export default class TikTokerPlugin extends Plugin {
 	}
 
 	// Network request wrapper methods for mobile CORS compatibility
-	private async makeHttpRequest(url: string, options: {method?: string, headers?: Record<string, string>, signal?: AbortSignal} = {}): Promise<{text: () => Promise<string>, json: () => Promise<any>, ok: boolean, status: number}> {
+	private async makeHttpRequest(url: string, options: {method?: string, headers?: Record<string, string>, signal?: AbortSignal} = {}): Promise<{text: () => Promise<string>, json: () => Promise<unknown>, ok: boolean, status: number}> {
 		if (Platform.isMobile) {
 			// Use Obsidian's native request method on mobile to bypass CORS
 			const headers = {
@@ -1367,14 +1467,32 @@ export default class TikTokerPlugin extends Plugin {
 				};
 			}
 		} else {
-			// Use standard fetch on desktop (preserve existing functionality)
-			return await fetch(url, options);
+			// Use requestUrl on desktop as well (required by Obsidian plugin guidelines)
+			try {
+				const response = await requestUrl({
+					url: url,
+					method: options.method || 'GET',
+					headers: options.headers || {}
+				});
+				return {
+					text: async () => response.text,
+					json: async () => response.json,
+					ok: response.status >= 200 && response.status < 300,
+					status: response.status
+				};
+			} catch (error) {
+				return {
+					text: async () => { throw error; },
+					json: async () => { throw error; },
+					ok: false,
+					status: 0
+				};
+			}
 		}
 	}
 
 	private async makeHeadRequest(url: string, options: {redirect?: string, signal?: AbortSignal, headers?: Record<string, string>} = {}): Promise<{url: string, headers: {get: (key: string) => string | null}}> {
-		// Enhanced mobile user agents for better compatibility
-		const mobileUserAgent = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
+		// Desktop user agent for better compatibility
 		const desktopUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 		
 		if (Platform.isMobile) {
@@ -1462,47 +1580,34 @@ export default class TikTokerPlugin extends Plugin {
 				}
 			};
 		} else {
-			// Enhanced desktop handling - try both methods for reliability
+			// Desktop handling using requestUrl (required by Obsidian plugin guidelines)
 			try {
-				const response = await fetch(url, {
-					method: 'HEAD',
-					redirect: (options.redirect as RequestRedirect) || 'follow',
-					signal: options.signal,
+				const response = await requestUrl({
+					url: url,
+					method: 'GET',
 					headers: {
 						'user-agent': desktopUserAgent,
 						...(options.headers || {})
 					}
 				});
-				return { 
-					url: response.url,
-					headers: response.headers
+
+				// Extract final URL from response content if available
+				const finalUrl = this.extractFinalUrlFromResponse(response.text, url);
+
+				return {
+					url: finalUrl || url,
+					headers: {
+						get: (key: string) => response.headers[key] || null
+					}
 				};
 			} catch (error) {
-				// Desktop fallback: try GET if HEAD fails
-				this.debugLog('Desktop HEAD request failed, trying GET:', error);
-				try {
-					const getResponse = await fetch(url, {
-						method: 'GET',
-						redirect: (options.redirect as RequestRedirect) || 'follow',
-						signal: options.signal,
-						headers: {
-							'user-agent': desktopUserAgent,
-							...(options.headers || {})
-						}
-					});
-					return { 
-						url: getResponse.url,
-						headers: getResponse.headers
-					};
-				} catch (getError) {
-					this.debugLog('All desktop expansion attempts failed:', getError);
-					throw getError;
-				}
+				this.debugLog('Desktop request failed:', error);
+				throw error;
 			}
 		}
 	}
 
-	private async createTikTokNote(data: any, isBulkProcessing: boolean = false): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string}> {
+	private async createTikTokNote(data: TikTokData, isBulkProcessing: boolean = false): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string}> {
 		const fileName = this.generateFileName(data);
 		const noteTitle = this.generateNoteTitle(data);
 		const noteContent = this.generateNoteContent(data);
@@ -1551,9 +1656,9 @@ export default class TikTokerPlugin extends Plugin {
 			// Open the note if the setting is enabled and not bulk processing
 			if (this.settings.openNoteOnCreation && !isBulkProcessing) {
 				const file = this.app.vault.getAbstractFileByPath(filePath);
-				if (file) {
+				if (file instanceof TFile) {
 					const leaf = this.app.workspace.getLeaf(false);
-					await leaf.openFile(file as any);
+					await leaf.openFile(file);
 				}
 			}
 
@@ -1612,7 +1717,7 @@ export default class TikTokerPlugin extends Plugin {
 			.trim();
 	}
 
-	private generateFileName(data: any): string {
+	private generateFileName(data: TikTokData): string {
 		const fileName = this.settings.fileNamingPattern
 			.replace(/{{author}}/g, (data.author || 'unknown').replace(/[@#]/g, ''))
 			.replace(/{{date}}/g, data.createdDate || data.date || this.getCurrentDateString())
@@ -1623,7 +1728,7 @@ export default class TikTokerPlugin extends Plugin {
 		return this.sanitizeFileName(fileName);
 	}
 
-	private generateNoteTitle(data: any): string {
+	private generateNoteTitle(data: TikTokData): string {
 		// Simply remove hashtags from description for cleaner titles
 		let cleanDescription = (data.description || 'Unknown');
 		
@@ -1644,7 +1749,7 @@ export default class TikTokerPlugin extends Plugin {
 			.replace(/{{author}}/g, data.author || 'Unknown');
 	}
 
-	private generateNoteContent(data: any): string {
+	private generateNoteContent(data: TikTokData): string {
 		let content = '';
 
 		if (this.settings.enableProperties) {
@@ -1743,7 +1848,7 @@ export default class TikTokerPlugin extends Plugin {
 				const result = await Promise.race([
 					processUrlPromise,
 					timeoutPromise
-				]) as {success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean, isSlideshow?: boolean, isPrivate?: boolean, filePath?: string, data?: any};
+				]) as ProcessingResult;
 
 				results.push({ 
 					url, 
@@ -1840,7 +1945,7 @@ export default class TikTokerPlugin extends Plugin {
 
 			if (!hasTranscribedProperty && !hasTranscriptionSection) {
 				// Check if file has TikTok URL
-				const tiktokUrlPattern = /https:\/\/(?:www\.|vm\.)?tiktok\.com\/[^\s\)]+/g;
+				const tiktokUrlPattern = /https:\/\/(?:www\.|vm\.)?tiktok\.com\/[^\s)]+/g;
 				if (tiktokUrlPattern.test(content)) {
 					untranscribed.push(file);
 				}
@@ -1864,7 +1969,7 @@ export default class TikTokerPlugin extends Plugin {
 
 		// Extract URLs from files
 		const urls: string[] = [];
-		const tiktokUrlPattern = /https:\/\/(?:www\.|vm\.)?tiktok\.com\/[^\s\)]+/g;
+		const tiktokUrlPattern = /https:\/\/(?:www\.|vm\.)?tiktok\.com\/[^\s)]+/g;
 
 		for (const file of files) {
 			const content = await this.app.vault.cachedRead(file);
@@ -1883,7 +1988,7 @@ export default class TikTokerPlugin extends Plugin {
 		await this.processBulkTikToks(urls, true);
 	}
 
-	private async processTikTokUrlBulk(url: string): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string, oembedFailed?: boolean, isSlideshow?: boolean, isPrivate?: boolean, filePath?: string, data?: any}> {
+	private async processTikTokUrlBulk(url: string): Promise<ProcessingResult> {
 		try {
 			const expandedUrl = await this.expandUrl(url);
 			const tikTokData = await this.fetchTikTokData(expandedUrl, true);
@@ -1955,19 +2060,19 @@ export default class TikTokerPlugin extends Plugin {
 		return await this.expandUrl(url);
 	}
 
-	public async fetchTikTokDataPublic(url: string): Promise<any> {
+	public async fetchTikTokDataPublic(url: string): Promise<TikTokData | null> {
 		return await this.fetchTikTokData(url, false);
 	}
 
-	public generateFileNamePublic(data: any): string {
+	public generateFileNamePublic(data: TikTokData): string {
 		return this.generateFileName(data);
 	}
 
-	public generateNoteContentPublic(data: any): string {
+	public generateNoteContentPublic(data: TikTokData): string {
 		return this.generateNoteContent(data);
 	}
 
-	public async createTikTokNotePublic(data: any): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string}> {
+	public async createTikTokNotePublic(data: TikTokData): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string}> {
 		return await this.createTikTokNote(data, false);
 	}
 
@@ -1980,16 +2085,16 @@ export default class TikTokerPlugin extends Plugin {
 		new Notice('Testing transcription setup...');
 
 		try {
-			const { exec } = require('child_process');
-			const { promisify } = require('util');
-			const path = require('path');
-			const os = require('os');
+			const childProcess = window.require('child_process') as typeof import('child_process');
+			const util = window.require('util') as typeof import('util');
+			const path = window.require('path') as typeof import('path');
+			const os = window.require('os') as typeof import('os');
 
-			const execAsync = promisify(exec);
+			const execAsync = util.promisify(childProcess.exec);
 
 			// Get absolute path to vault and plugin directory
-			const vaultPath = (this.app.vault.adapter as any).basePath || '';
-			const pluginDir = (this.manifest as any).dir || '';
+			const vaultPath = (this.app.vault.adapter as FileSystemAdapter & {basePath?: string}).basePath || '';
+			const pluginDir = (this.manifest as PluginManifest).dir || '';
 			const absolutePluginDir = path.join(vaultPath, pluginDir);
 			const scriptPath = path.join(absolutePluginDir, 'whisper-scripts', 'manage_whisper.py');
 
@@ -2023,7 +2128,7 @@ export default class TikTokerPlugin extends Plugin {
 		const noticeEl = (notice as any).noticeEl;
 
 		if (noticeEl) {
-			noticeEl.style.cssText = 'cursor: pointer;';
+			noticeEl.addClass('tiktoker-notice-clickable');
 			noticeEl.onclick = () => {
 				notice.hide();
 				this.openScriptInstallationModal();
@@ -2035,9 +2140,9 @@ export default class TikTokerPlugin extends Plugin {
 	}
 
 	openScriptInstallationModal() {
-		const path = require('path');
-		const vaultPath = (this.app.vault.adapter as any).basePath || '';
-		const pluginDir = (this.manifest as any).dir || '';
+		const path = window.require('path') as typeof import('path');
+		const vaultPath = (this.app.vault.adapter as FileSystemAdapter & {basePath?: string}).basePath || '';
+		const pluginDir = (this.manifest as PluginManifest).dir || '';
 		const absolutePluginDir = path.join(vaultPath, pluginDir);
 		const installer = new ScriptInstaller(absolutePluginDir);
 
@@ -2057,10 +2162,10 @@ export default class TikTokerPlugin extends Plugin {
 			return;
 		}
 
-		const path = require('path');
-		const fs = require('fs');
-		const vaultPath = (this.app.vault.adapter as any).basePath || '';
-		const pluginDir = (this.manifest as any).dir || '';
+		const path = window.require('path') as typeof import('path');
+		const fs = window.require('fs') as typeof import('fs');
+		const vaultPath = (this.app.vault.adapter as FileSystemAdapter & {basePath?: string}).basePath || '';
+		const pluginDir = (this.manifest as PluginManifest).dir || '';
 		const absolutePluginDir = path.join(vaultPath, pluginDir);
 		const autoScriptPath = path.join(absolutePluginDir, 'whisper-scripts', 'tiktok2text.sh');
 
@@ -2134,28 +2239,16 @@ class TestResultModal extends Modal {
 		const {contentEl} = this;
 		contentEl.empty();
 
-		contentEl.createEl('h2', {text: 'Transcription Setup Test'});
+		contentEl.createEl('h2', {text: 'Transcription setup test'});
 
-		const resultContainer = contentEl.createDiv({cls: 'transcription-test-result'});
-		resultContainer.style.cssText = `
-			padding: 16px;
-			background-color: var(--background-secondary);
-			border-radius: 4px;
-			font-family: var(--font-monospace);
-			font-size: 0.9em;
-			white-space: pre-wrap;
-			max-height: 400px;
-			overflow-y: auto;
-		`;
+		const resultContainer = contentEl.createDiv({cls: 'tiktoker-test-result'});
 
 		resultContainer.textContent = this.result;
 
-		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
-		buttonContainer.style.cssText = 'margin-top: 16px; display: flex; justify-content: flex-end;';
+		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-button-container-end'});
 
 		if (this.hasErrors) {
-			const installButton = buttonContainer.createEl('button', {text: 'Install Instructions', cls: 'mod-cta'});
-			installButton.style.marginRight = '8px';
+			const installButton = buttonContainer.createEl('button', {text: 'Install instructions', cls: 'mod-cta tiktoker-mr-8'});
 			installButton.onclick = () => {
 				window.open('https://brew.sh', '_blank');
 			};
@@ -2177,7 +2270,7 @@ class DependencyCheckModal extends Modal {
 	platform: string;
 	rawOutput: string;
 
-	constructor(app: App, dependencies: any, platform: string, rawOutput: string) {
+	constructor(app: App, dependencies: DependencyStatus, platform: string, rawOutput: string) {
 		super(app);
 		this.dependencies = dependencies;
 		this.platform = platform;
@@ -2226,29 +2319,27 @@ class DependencyCheckModal extends Modal {
 		const {contentEl} = this;
 		contentEl.empty();
 
-		contentEl.createEl('h2', {text: 'Dependency Check'});
+		contentEl.createEl('h2', {text: 'Dependency check'});
 
 		// Status section
-		const statusSection = contentEl.createDiv({cls: 'tiktoker-dependency-status'});
-		statusSection.style.cssText = 'margin: 16px 0; padding: 16px; background-color: var(--background-secondary); border-radius: 4px;';
+		const statusSection = contentEl.createDiv({cls: 'tiktoker-status-section'});
 
 		const allOk = Object.values(this.dependencies).every(val => val);
 
 		if (allOk) {
 			statusSection.createEl('div', {
 				text: '✓ All dependencies installed!',
-				cls: 'tiktoker-dependency-success'
-			}).style.cssText = 'color: var(--interactive-success); font-weight: 600; margin-bottom: 12px;';
+				cls: 'tiktoker-status-success'
+			});
 		} else {
 			statusSection.createEl('div', {
 				text: 'Some dependencies are missing',
-				cls: 'tiktoker-dependency-warning'
-			}).style.cssText = 'color: var(--text-warning); font-weight: 600; margin-bottom: 12px;';
+				cls: 'tiktoker-status-warning'
+			});
 		}
 
 		// Dependency list
-		const depList = statusSection.createEl('div');
-		depList.style.cssText = 'font-family: var(--font-monospace); font-size: 0.9em;';
+		const depList = statusSection.createEl('div', {cls: 'tiktoker-dep-list'});
 
 		const depLabels = {
 			python3: 'Python 3',
@@ -2259,40 +2350,34 @@ class DependencyCheckModal extends Modal {
 		};
 
 		Object.entries(this.dependencies).forEach(([key, installed]) => {
-			const line = depList.createEl('div');
-			line.style.cssText = 'margin: 4px 0;';
+			const line = depList.createEl('div', {cls: 'tiktoker-dep-line'});
 			line.textContent = `${installed ? '✓' : '✗'} ${depLabels[key as keyof typeof depLabels]}`;
-			line.style.color = installed ? 'var(--interactive-success)' : 'var(--text-error)';
+			line.addClass(installed ? 'tiktoker-dep-success' : 'tiktoker-dep-error');
 		});
 
 		// Installation section (only if missing dependencies)
 		if (!allOk) {
-			const installSection = contentEl.createDiv({cls: 'tiktoker-installation-instructions'});
-			installSection.style.cssText = 'margin: 16px 0;';
+			const installSection = contentEl.createDiv({cls: 'tiktoker-install-section'});
 
-			installSection.createEl('h3', {text: 'Installation Instructions'});
+			installSection.createEl('h3', {text: 'Installation instructions'});
 
-			const instructions = installSection.createDiv();
-			instructions.style.cssText = 'padding: 16px; background-color: var(--background-secondary); border-radius: 4px;';
+			const instructions = installSection.createDiv({cls: 'tiktoker-instructions'});
 
 			const commands = this.getInstallCommands();
 
 			// Platform-specific intro
 			if (this.platform === 'darwin' && !this.dependencies.python3 && !this.dependencies.ytdlp && !this.dependencies.ffmpeg) {
-				const homebrewNote = instructions.createDiv();
-				homebrewNote.style.cssText = 'margin-bottom: 16px; padding: 12px; background-color: var(--background-modifier-border); border-radius: 4px;';
+				const homebrewNote = instructions.createDiv({cls: 'tiktoker-homebrew-note'});
 				homebrewNote.createEl('strong', {text: 'First, install Homebrew (package manager): '});
 				homebrewNote.createEl('br');
 				homebrewNote.createEl('br');
-				const brewCode = homebrewNote.createEl('code');
+				const brewCode = homebrewNote.createEl('code', {cls: 'tiktoker-code-inline'});
 				brewCode.textContent = commands.homebrew;
-				brewCode.style.cssText = 'font-size: 0.85em; padding: 4px 8px; background: var(--background-primary); border-radius: 3px; display: block; margin: 8px 0;';
-				const brewBtn = homebrewNote.createEl('button', {text: 'Copy'});
-				brewBtn.style.cssText = 'margin-top: 8px;';
+				const brewBtn = homebrewNote.createEl('button', {text: 'Copy', cls: 'tiktoker-brew-btn'});
 				brewBtn.onclick = () => this.copyToClipboard(commands.homebrew, brewBtn);
 			}
 
-			instructions.createEl('p', {text: 'Run these commands in your terminal:'}).style.fontWeight = '600';
+			instructions.createEl('p', {text: 'Run these commands in your terminal:', cls: 'tiktoker-font-bold'});
 
 			// Show commands for missing dependencies
 			if (!this.dependencies.python3) {
@@ -2305,51 +2390,44 @@ class DependencyCheckModal extends Modal {
 				this.createCommandBlock(instructions, 'FFmpeg', commands.ffmpeg);
 			}
 			if (!this.dependencies.venv || !this.dependencies.whisper) {
-				const venvNote = instructions.createDiv();
-				venvNote.style.cssText = 'margin-top: 16px; padding: 12px; background-color: var(--background-modifier-border); border-radius: 4px;';
+				const venvNote = instructions.createDiv({cls: 'tiktoker-venv-note'});
 				venvNote.createEl('strong', {text: 'Note: '});
 				venvNote.appendText('Python venv and faster-whisper will be automatically set up when you first run a transcription.');
 			}
 		}
 
 		// Raw output (collapsible)
-		const detailsSection = contentEl.createDiv();
-		detailsSection.style.cssText = 'margin-top: 16px;';
+		const detailsSection = contentEl.createDiv({cls: 'tiktoker-details-section'});
 
-		const detailsToggle = detailsSection.createEl('div');
-		detailsToggle.style.cssText = 'cursor: pointer; padding: 8px; background-color: var(--background-secondary); border-radius: 4px; user-select: none;';
+		const detailsToggle = detailsSection.createEl('div', {cls: 'tiktoker-details-toggle'});
 		detailsToggle.textContent = '▶ Show detailed output';
 
-		const detailsContent = detailsSection.createEl('pre');
-		detailsContent.style.cssText = 'display: none; margin-top: 8px; padding: 12px; background-color: var(--background-secondary); border-radius: 4px; font-family: var(--font-monospace); font-size: 0.85em; white-space: pre-wrap; max-height: 200px; overflow-y: auto;';
+		const detailsContent = detailsSection.createEl('pre', {cls: 'tiktoker-details-content'});
 		detailsContent.textContent = this.rawOutput;
 
 		let expanded = false;
 		detailsToggle.onclick = () => {
 			expanded = !expanded;
-			detailsContent.style.display = expanded ? 'block' : 'none';
+			detailsContent.toggleClass('expanded', expanded);
 			detailsToggle.textContent = expanded ? '▼ Hide detailed output' : '▶ Show detailed output';
 		};
 
 		// Close button
-		const buttonContainer = contentEl.createDiv();
-		buttonContainer.style.cssText = 'margin-top: 16px; display: flex; justify-content: flex-end;';
+		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-button-container-end'});
 
 		const closeButton = buttonContainer.createEl('button', {text: 'Close', cls: 'mod-cta'});
 		closeButton.onclick = () => this.close();
 	}
 
 	createCommandBlock(container: HTMLElement, name: string, command: string) {
-		const block = container.createDiv();
-		block.style.cssText = 'margin: 12px 0; padding: 12px; background-color: var(--background-modifier-border); border-radius: 4px;';
+		const block = container.createDiv({cls: 'tiktoker-install-block'});
 
-		block.createEl('div', {text: name}).style.cssText = 'font-weight: 600; margin-bottom: 8px;';
+		block.createEl('div', {text: name, cls: 'tiktoker-install-block-name'});
 
-		const codeBlock = block.createEl('code');
+		const codeBlock = block.createEl('code', {cls: 'tiktoker-code-block'});
 		codeBlock.textContent = command;
-		codeBlock.style.cssText = 'font-size: 0.85em; padding: 8px 12px; background: var(--background-primary); border-radius: 3px; display: block; margin-bottom: 8px;';
 
-		const copyBtn = block.createEl('button', {text: 'Copy Command'});
+		const copyBtn = block.createEl('button', {text: 'Copy command'});
 		copyBtn.onclick = () => this.copyToClipboard(command, copyBtn);
 	}
 
@@ -2373,14 +2451,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		// Create tab navigation
-		const tabNav = containerEl.createDiv({cls: 'tiktoker-settings-tabs'});
-		tabNav.style.cssText = `
-			display: flex;
-			gap: 8px;
-			margin-bottom: 24px;
-			border-bottom: 2px solid var(--background-modifier-border);
-			padding-bottom: 8px;
-		`;
+		const tabNav = containerEl.createDiv({cls: 'tiktoker-tab-nav'});
 
 		let tabs = [
 			{id: 'general' as const, label: 'General'},
@@ -2395,16 +2466,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 		}
 
 		tabs.forEach(tab => {
-			const tabButton = tabNav.createEl('button', {text: tab.label});
-			tabButton.style.cssText = `
-				padding: 8px 16px;
-				border: none;
-				background: ${this.activeTab === tab.id ? 'var(--interactive-accent)' : 'transparent'};
-				color: ${this.activeTab === tab.id ? 'var(--text-on-accent)' : 'var(--text-normal)'};
-				cursor: pointer;
-				border-radius: 4px;
-				font-weight: ${this.activeTab === tab.id ? '600' : '400'};
-			`;
+			const tabButton = tabNav.createEl('button', {text: tab.label, cls: 'tiktoker-tab-button'});
+			tabButton.toggleClass('active', this.activeTab === tab.id);
 			tabButton.onclick = () => {
 				this.activeTab = tab.id;
 				this.display();
@@ -2431,32 +2494,19 @@ class TikTokerSettingTab extends PluginSettingTab {
 	}
 
 	createCollapsibleSection(container: HTMLElement, title: string, defaultOpen: boolean = true): HTMLElement {
-		const section = container.createDiv({cls: 'setting-section'});
-		section.style.marginBottom = '24px';
+		const section = container.createDiv({cls: 'tiktoker-collapsible-section'});
 
-		const header = section.createDiv({cls: 'setting-section-header'});
-		header.style.cssText = `
-			display: flex;
-			align-items: center;
-			gap: 8px;
-			cursor: pointer;
-			padding: 8px 0;
-			border-bottom: 1px solid var(--background-modifier-border);
-			margin-bottom: 16px;
-			font-weight: 600;
-			font-size: 1.1em;
-		`;
+		const header = section.createDiv({cls: 'tiktoker-collapsible-header'});
 
-		const arrow = header.createSpan({text: defaultOpen ? '▼' : '▶'});
-		arrow.style.fontSize = '0.8em';
+		const arrow = header.createSpan({text: defaultOpen ? '▼' : '▶', cls: 'tiktoker-collapsible-arrow'});
 		header.createSpan({text: title});
 
-		const content = section.createDiv({cls: 'setting-section-content'});
-		content.style.display = defaultOpen ? 'block' : 'none';
+		const content = section.createDiv({cls: 'tiktoker-collapsible-content'});
+		content.toggleClass('tiktoker-hidden', !defaultOpen);
 
 		header.onclick = () => {
-			const isOpen = content.style.display !== 'none';
-			content.style.display = isOpen ? 'none' : 'block';
+			const isOpen = !content.hasClass('tiktoker-hidden');
+			content.toggleClass('tiktoker-hidden', isOpen);
 			arrow.textContent = isOpen ? '▶' : '▼';
 		};
 
@@ -2464,15 +2514,13 @@ class TikTokerSettingTab extends PluginSettingTab {
 	}
 
 	renderGeneralTab(container: HTMLElement): void {
-		const variablesInfo = container.createEl('div', {cls: 'setting-item-description'});
-		variablesInfo.style.cssText = 'margin-bottom: 24px; padding: 12px; background-color: var(--background-secondary); border-radius: 4px;';
+		const variablesInfo = container.createEl('div', {cls: 'tiktoker-variables-info'});
 		variablesInfo.createEl('strong', {text: 'Available template variables: '});
 		variablesInfo.appendText('{{author}}, {{description}}, {{hashtags}}, {{iframe}}, {{transcription}}, {{date}}, {{url}}');
 
 		// Mobile transcription note
 		if (Platform.isMobile) {
-			const mobileNote = container.createEl('div', {cls: 'setting-item-description'});
-			mobileNote.style.cssText = 'margin-bottom: 24px; padding: 12px; background-color: var(--background-modifier-error-hover); border-radius: 4px; border-left: 4px solid var(--interactive-accent);';
+			const mobileNote = container.createEl('div', {cls: 'tiktoker-mobile-note'});
 			mobileNote.createEl('strong', {text: 'Note: '});
 			mobileNote.appendText('Transcription is only available on desktop (Windows, macOS, Linux) from version 1.5.0 onwards. Mobile devices can create TikTok notes but cannot generate transcriptions.');
 		}
@@ -2660,52 +2708,42 @@ class TikTokerSettingTab extends PluginSettingTab {
 	}
 
 	renderTranscriptionTab(container: HTMLElement): void {
-		const infoBox = container.createEl('div');
-		infoBox.style.cssText = 'margin-bottom: 24px; padding: 12px; background-color: var(--background-secondary); border-radius: 4px;';
-		infoBox.createEl('strong', {text: 'Desktop Only: '});
+		const infoBox = container.createEl('div', {cls: 'tiktoker-info-box'});
+		infoBox.createEl('strong', {text: 'Desktop only: '});
 		infoBox.appendText('Local transcription requires Python, yt-dlp, ffmpeg, and faster-whisper.');
 
 		// Status Banner (shows installation status)
 		if (!Platform.isMobile && !this.plugin.settings.setupBannerDismissed) {
-			const banner = container.createEl('div');
-			banner.style.cssText = 'margin-bottom: 16px; padding: 12px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center;';
-
 			if (this.plugin.settings.scriptsInstalled) {
 				// Green success banner
-				banner.style.backgroundColor = 'var(--background-success)';
-				banner.style.borderLeft = '4px solid var(--text-success)';
+				const banner = container.createEl('div', {cls: 'tiktoker-banner tiktoker-banner-success'});
 
 				const textDiv = banner.createDiv();
-				textDiv.createSpan({text: '✓ ', cls: 'success-icon'}).style.color = 'var(--text-success)';
+				textDiv.createSpan({text: '✓ ', cls: 'tiktoker-success-icon'});
 				textDiv.appendText('Scripts installed and ready');
 
-				const testBtn = banner.createEl('button', {text: 'Test Setup', cls: 'mod-cta'});
-				testBtn.style.marginLeft = '12px';
+				const testBtn = banner.createEl('button', {text: 'Test setup', cls: 'mod-cta tiktoker-ml-12'});
 				testBtn.onclick = async () => {
 					await this.plugin.testTranscriptionSetup();
 				};
 			} else {
 				// Yellow warning banner
-				banner.style.backgroundColor = 'var(--background-modifier-error)';
-				banner.style.borderLeft = '4px solid var(--text-warning)';
+				const banner = container.createEl('div', {cls: 'tiktoker-banner tiktoker-banner-warning'});
 
-				const contentDiv = banner.createDiv();
-				contentDiv.style.flex = '1';
+				const contentDiv = banner.createDiv({cls: 'tiktoker-banner-content'});
 
 				const textDiv = contentDiv.createDiv();
-				textDiv.createSpan({text: '⚠ ', cls: 'warning-icon'}).style.color = 'var(--text-warning)';
+				textDiv.createSpan({text: '⚠ ', cls: 'tiktoker-warning-icon'});
 				textDiv.appendText('Transcription scripts not installed');
 
-				const buttonContainer = banner.createDiv();
-				buttonContainer.style.cssText = 'display: flex; gap: 8px;';
+				const buttonContainer = banner.createDiv({cls: 'tiktoker-button-group'});
 
-				const installBtn = buttonContainer.createEl('button', {text: 'Install Now', cls: 'mod-cta'});
+				const installBtn = buttonContainer.createEl('button', {text: 'Install now', cls: 'mod-cta'});
 				installBtn.onclick = () => {
 					this.plugin.openScriptInstallationModal();
 				};
 
-				const dismissBtn = buttonContainer.createEl('button', {text: '✕'});
-				dismissBtn.style.cssText = 'padding: 4px 8px; background: transparent; border: none; cursor: pointer; color: var(--text-muted);';
+				const dismissBtn = buttonContainer.createEl('button', {text: '✕', cls: 'tiktoker-dismiss-btn'});
 				dismissBtn.onclick = async () => {
 					this.plugin.settings.setupBannerDismissed = true;
 					await this.plugin.saveSettings();
@@ -2728,8 +2766,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 				}));
 
 		// Add dependency disclaimer
-		const disclaimerEl = mainSection.createDiv({cls: 'setting-item-description'});
-		disclaimerEl.style.cssText = 'margin-top: -10px; margin-bottom: 15px; padding: 10px; background-color: var(--background-secondary); border-left: 3px solid var(--interactive-accent); font-size: 0.9em;';
+		const disclaimerEl = mainSection.createDiv({cls: 'tiktoker-disclaimer'});
 		disclaimerEl.createEl('strong', {text: 'Note: '});
 		disclaimerEl.appendText('Enabling transcription requires installing external dependencies (Python 3, yt-dlp, ffmpeg, and faster-whisper). These packages are installed separately on your system. See the Transcription Setup section in settings for installation instructions.');
 
@@ -2854,8 +2891,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 					.addOption('medium', 'medium (1.5GB)')
 					.addOption('large', 'large (2.9GB)')
 					.setValue(this.plugin.settings.whisperModel)
-					.onChange(async (value: any) => {
-						this.plugin.settings.whisperModel = value;
+					.onChange(async (value: string) => {
+						this.plugin.settings.whisperModel = value as 'tiny' | 'base' | 'small' | 'medium' | 'large';
 						await this.plugin.saveSettings();
 					}));
 
@@ -2866,8 +2903,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 					.addOption('chrome', 'Chrome')
 					.addOption('safari', 'Safari')
 					.setValue(this.plugin.settings.whisperBrowser)
-					.onChange(async (value: any) => {
-						this.plugin.settings.whisperBrowser = value;
+					.onChange(async (value: string) => {
+						this.plugin.settings.whisperBrowser = value as 'chrome' | 'safari';
 						await this.plugin.saveSettings();
 					}));
 
@@ -2899,7 +2936,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 	renderStorageTab(container: HTMLElement): void {
 		const infoBox = container.createEl('div');
 		infoBox.style.cssText = 'margin-bottom: 24px; padding: 12px; background-color: var(--background-secondary); border-radius: 4px;';
-		infoBox.innerHTML = '<strong>Storage Management:</strong> By default, temporary files are automatically cleaned up. Transcriptions are saved directly in notes.';
+		infoBox.createEl('strong', { text: 'Storage management:' });
+		infoBox.appendText(' By default, temporary files are automatically cleaned up. Transcriptions are saved directly in notes.');
 
 		const cleanupSection = this.createCollapsibleSection(container, 'Storage & Cleanup');
 
@@ -3005,8 +3043,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 				.addOption('author', 'By Author')
 				.addOption('hashtags', 'By Hashtags')
 				.setValue(this.plugin.settings.reviewQueueDefaultSort)
-				.onChange(async (value: any) => {
-					this.plugin.settings.reviewQueueDefaultSort = value;
+				.onChange(async (value: string) => {
+					this.plugin.settings.reviewQueueDefaultSort = value as 'created-desc' | 'created-asc' | 'author' | 'hashtags';
 					await this.plugin.saveSettings();
 				}));
 
@@ -3096,8 +3134,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 				.addOption('scroll-container', 'Scroll Container')
 				.addOption('floating-bar', 'Floating Action Bar')
 				.setValue(this.plugin.settings.reviewQueueButtonLayout)
-				.onChange(async (value: any) => {
-					this.plugin.settings.reviewQueueButtonLayout = value;
+				.onChange(async (value: string) => {
+					this.plugin.settings.reviewQueueButtonLayout = value as 'sticky-footer' | 'scroll-container' | 'floating-bar';
 					await this.plugin.saveSettings();
 					// Update the layout in the active review view if it exists
 					const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_TIKTOK_REVIEW);
@@ -3126,7 +3164,7 @@ class DuplicateFileModal extends Modal {
 		const {contentEl} = this;
 		contentEl.empty();
 
-		contentEl.createEl('h2', {text: 'File Already Exists'});
+		contentEl.createEl('h2', {text: 'File already exists'});
 		contentEl.createEl('p', {text: `A file named "${this.fileName}" already exists.`});
 		contentEl.createEl('p', {text: `Title: "${this.noteTitle}"`});
 		contentEl.createEl('p', {text: 'What would you like to do?'});
@@ -3139,7 +3177,7 @@ class DuplicateFileModal extends Modal {
 			this.close();
 		};
 
-		const duplicateButton = buttonContainer.createEl('button', {text: 'Create Duplicate'});
+		const duplicateButton = buttonContainer.createEl('button', {text: 'Create duplicate'});
 		duplicateButton.onclick = () => {
 			this.onSubmit('duplicate');
 			this.close();
@@ -3182,12 +3220,12 @@ class BulkProcessingModal extends Modal {
 		// Select All / Deselect All buttons
 		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-bulk-select-buttons'});
 
-		const selectAllBtn = buttonContainer.createEl('button', {text: 'Select All'});
+		const selectAllBtn = buttonContainer.createEl('button', {text: 'Select all'});
 		selectAllBtn.onclick = () => {
 			this.checkboxes.forEach(cb => cb.checked = true);
 		};
 
-		const deselectAllBtn = buttonContainer.createEl('button', {text: 'Deselect All'});
+		const deselectAllBtn = buttonContainer.createEl('button', {text: 'Deselect all'});
 		deselectAllBtn.onclick = () => {
 			this.checkboxes.forEach(cb => cb.checked = false);
 		};
@@ -3202,7 +3240,7 @@ class BulkProcessingModal extends Modal {
 			checkbox.checked = true; // Default to checked
 			this.checkboxes.push(checkbox);
 
-			const urlText = urlItem.createSpan({text: url});
+			urlItem.createSpan({text: url});
 		});
 
 		// Transcription toggle (desktop only)
@@ -3214,13 +3252,13 @@ class BulkProcessingModal extends Modal {
 			this.transcriptionCheckbox = transcriptionLabel.createEl('input', {type: 'checkbox'});
 			this.transcriptionCheckbox.checked = this.defaultTranscription; // Use default from settings
 
-			const transcriptionText = transcriptionLabel.createSpan({text: 'Enable transcription for processed videos'});
+			transcriptionLabel.createSpan({text: 'Enable transcription for processed videos'});
 		}
 
 		// Action buttons
 		const actionContainer = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
 
-		const processBtn = actionContainer.createEl('button', {text: 'Process Selected', cls: 'mod-cta'});
+		const processBtn = actionContainer.createEl('button', {text: 'Process selected', cls: 'mod-cta'});
 		processBtn.onclick = () => {
 			const selectedUrls = this.urls.filter((_, index) => this.checkboxes[index].checked);
 			if (selectedUrls.length === 0) {
@@ -3256,8 +3294,8 @@ class BulkProgressModal extends Modal {
 	isCompleted: boolean = false;
 	minimalToast: HTMLDivElement | null = null;
 	transcriptionTasks: Map<string, {status: string, startTime: number, endTime?: number}> = new Map();
-	currentTranscription: {url: string, startTime: number, interval?: any} | null = null;
-	tiktokData: Map<string, any> = new Map(); // Store TikTok data for display
+	currentTranscription: {url: string, startTime: number, interval?: number} | null = null;
+	tiktokData: Map<string, TikTokData> = new Map(); // Store TikTok data for display
 
 	constructor(app: App, total: number) {
 		super(app);
@@ -3287,7 +3325,7 @@ class BulkProgressModal extends Modal {
 		// Transcription status section (desktop only)
 		if (!Platform.isMobile) {
 			const transcriptionSection = contentEl.createDiv({cls: 'tiktoker-transcription-section'});
-			transcriptionSection.createEl('h4', {text: 'Transcription Status'});
+			transcriptionSection.createEl('h4', {text: 'Transcription status'});
 			this.transcriptionStatusText = transcriptionSection.createEl('p', {text: 'Waiting for files to be created...'});
 			const transcriptionContainer = transcriptionSection.createDiv({cls: 'tiktoker-mini-progress-bar'});
 			this.transcriptionProgress = transcriptionContainer.createDiv({cls: 'tiktoker-mini-progress'});
@@ -3389,7 +3427,7 @@ class BulkProgressModal extends Modal {
 		}
 	}
 
-	updateTranscriptionStatus(url: string, status: 'started' | 'completed' | 'failed', timeElapsed?: number, data?: any) {
+	updateTranscriptionStatus(url: string, status: 'started' | 'completed' | 'failed', timeElapsed?: number, data?: TikTokData) {
 		// Store TikTok data if provided
 		if (data && status === 'started') {
 			this.tiktokData.set(url, data);
@@ -3520,16 +3558,16 @@ class BulkProgressModal extends Modal {
 }
 
 class BulkResultsModal extends Modal {
-	successful: { url: string; success: boolean }[];
-	failed: { url: string; success: boolean; error?: string }[];
-	duplicates: { url: string; duplicate: boolean; fileName?: string; noteTitle?: string }[];
-	oembedFailed: { url: string; success: boolean; oembedFailed: boolean; fileName?: string; noteTitle?: string }[];
-	slideshows: { url: string; success: boolean; isSlideshow: boolean; fileName?: string; noteTitle?: string }[];
-	skippedPrivate: { url: string; isPrivate: boolean }[];
+	successful: BulkSuccessResult[];
+	failed: BulkFailedResult[];
+	duplicates: BulkDuplicateResult[];
+	oembedFailed: BulkOEmbedFailedResult[];
+	slideshows: BulkSlideshowResult[];
+	skippedPrivate: BulkPrivateResult[];
 	onRetry: (failedUrls: string[]) => void;
 	plugin: TikTokerPlugin;
 
-	constructor(app: App, plugin: TikTokerPlugin, successful: any[], failed: any[], duplicates: any[], oembedFailed: any[], slideshows: any[], skippedPrivate: any[], onRetry: (failedUrls: string[]) => void) {
+	constructor(app: App, plugin: TikTokerPlugin, successful: BulkSuccessResult[], failed: BulkFailedResult[], duplicates: BulkDuplicateResult[], oembedFailed: BulkOEmbedFailedResult[], slideshows: BulkSlideshowResult[], skippedPrivate: BulkPrivateResult[], onRetry: (failedUrls: string[]) => void) {
 		super(app);
 		this.plugin = plugin;
 		this.successful = successful;
@@ -3545,7 +3583,7 @@ class BulkResultsModal extends Modal {
 		const {contentEl} = this;
 		contentEl.empty();
 
-		contentEl.createEl('h2', {text: 'Bulk Processing Results'});
+		contentEl.createEl('h2', {text: 'Bulk processing results'});
 
 		// Summary
 		const summary = contentEl.createDiv({cls: 'tiktoker-results-summary'});
@@ -3566,7 +3604,7 @@ class BulkResultsModal extends Modal {
 
 		// Show duplicates section
 		if (this.duplicates.length > 0) {
-			contentEl.createEl('h3', {text: 'Duplicate Files:'});
+			contentEl.createEl('h3', {text: 'Duplicate files:'});
 			
 			const duplicatesContainer = contentEl.createDiv({cls: 'tiktoker-duplicate-urls'});
 
@@ -3593,16 +3631,16 @@ class BulkResultsModal extends Modal {
 			// Add bulk duplicate actions
 			const bulkDuplicateActions = contentEl.createDiv({cls: 'tiktoker-bulk-duplicate-actions'});
 			
-			const bulkReplaceBtn = bulkDuplicateActions.createEl('button', {text: 'Replace All Duplicates'});
+			const bulkReplaceBtn = bulkDuplicateActions.createEl('button', {text: 'Replace all duplicates'});
 			bulkReplaceBtn.onclick = () => this.handleBulkDuplicateAction('replace');
 			
-			const bulkDuplicateBtn = bulkDuplicateActions.createEl('button', {text: 'Create All as Duplicates'});
+			const bulkDuplicateBtn = bulkDuplicateActions.createEl('button', {text: 'Create all as duplicates'});
 			bulkDuplicateBtn.onclick = () => this.handleBulkDuplicateAction('duplicate');
 		}
 
 		// Show slideshow section
 		if (this.slideshows.length > 0) {
-			contentEl.createEl('h3', {text: 'Image Slideshow Posts:'});
+			contentEl.createEl('h3', {text: 'Image slideshow posts:'});
 			
 			const slideshowContainer = contentEl.createDiv({cls: 'tiktoker-slideshow-urls'});
 
@@ -3617,7 +3655,7 @@ class BulkResultsModal extends Modal {
 
 		// Show private videos section
 		if (this.skippedPrivate.length > 0) {
-			contentEl.createEl('h3', {text: 'Private Videos Skipped:'});
+			contentEl.createEl('h3', {text: 'Private videos skipped:'});
 			
 			const privateContainer = contentEl.createDiv({cls: 'tiktoker-private-urls'});
 
@@ -3631,7 +3669,7 @@ class BulkResultsModal extends Modal {
 
 		// Show oEmbed fallback section
 		if (this.oembedFailed.length > 0) {
-			contentEl.createEl('h3', {text: 'Fallback Embed Files:'});
+			contentEl.createEl('h3', {text: 'Fallback embed files:'});
 			
 			const fallbackContainer = contentEl.createDiv({cls: 'tiktoker-fallback-urls'});
 
@@ -3658,7 +3696,7 @@ class BulkResultsModal extends Modal {
 			// Action buttons
 			const buttonContainer = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
 
-			const retryBtn = buttonContainer.createEl('button', {text: 'Retry Failed URLs', cls: 'mod-cta'});
+			const retryBtn = buttonContainer.createEl('button', {text: 'Retry failed URLs', cls: 'mod-cta'});
 			retryBtn.onclick = () => {
 				const failedUrls = this.failed.map(item => item.url);
 				this.onRetry(failedUrls);
@@ -3681,18 +3719,23 @@ class BulkResultsModal extends Modal {
 
 		try {
 			new Notice(`Processing duplicate: ${action}`);
-			
-			// Process the URL with the specified action  
+
+			// Process the URL with the specified action
 			const expandedUrl = await this.plugin.expandUrlPublic(url);
 			const tikTokData = await this.plugin.fetchTikTokDataPublic(expandedUrl);
-				
+
+			if (!tikTokData) {
+				new Notice('Failed to fetch TikTok data');
+				return;
+			}
+
 			if (action === 'replace') {
 				// Delete the existing file and create new one
 				const folderPath = this.plugin.settings.outputFolder;
 				const fileName = this.plugin.generateFileNamePublic(tikTokData);
 				const filePath = folderPath ? `${folderPath}/${fileName}.md` : `${fileName}.md`;
 				const existingFile = this.plugin.app.vault.getAbstractFileByPath(filePath);
-				
+
 				if (existingFile) {
 					await this.plugin.app.fileManager.trashFile(existingFile);
 				}
@@ -3705,7 +3748,7 @@ class BulkResultsModal extends Modal {
 				new Notice('Duplicate file created');
 			}
 			// Skip action does nothing
-			
+
 			// Remove this item from the duplicates list and refresh
 			this.duplicates = this.duplicates.filter(item => item.url !== url);
 			this.onOpen(); // Refresh the modal
@@ -3970,6 +4013,7 @@ class TikTokReviewView extends ItemView {
 	hashtagFilterInput: HTMLInputElement;
 	textFilterInput: HTMLInputElement;
 	sessionInfoDiv: HTMLElement;
+	filterTimeout: number | null = null;
 
 	constructor(leaf: WorkspaceLeaf, plugin: TikTokerPlugin) {
 		super(leaf);
@@ -4064,13 +4108,13 @@ class TikTokReviewView extends ItemView {
 
 		const filterButtonsDiv = filtersInputDiv.createDiv({ cls: 'tiktoker-review-filter-buttons' });
 
-		const saveSessionBtn = filterButtonsDiv.createEl('button', { text: 'Save Session', cls: 'mod-cta' });
+		const saveSessionBtn = filterButtonsDiv.createEl('button', { text: 'Save session', cls: 'mod-cta' });
 		saveSessionBtn.addEventListener('click', () => this.saveCurrentSession());
 
-		const clearFiltersBtn = filterButtonsDiv.createEl('button', { text: 'Clear Filters' });
+		const clearFiltersBtn = filterButtonsDiv.createEl('button', { text: 'Clear filters' });
 		clearFiltersBtn.addEventListener('click', () => this.clearFilters());
 
-		const resetSessionBtn = filterButtonsDiv.createEl('button', { text: 'Reset Session' });
+		const resetSessionBtn = filterButtonsDiv.createEl('button', { text: 'Reset session' });
 		resetSessionBtn.addEventListener('click', () => this.resetCurrentSession());
 
 		// Combined Filter checkboxes and Sort controls
@@ -4107,10 +4151,10 @@ class TikTokReviewView extends ItemView {
 		// Sort dropdown with new options
 		const sortLabel = filterDiv.createEl('span', { text: 'Sort: ', cls: 'tiktoker-review-sort-label' });
 		const sortToggle = filterDiv.createEl('select', { cls: 'tiktoker-dropdown' });
-		sortToggle.createEl('option', { text: 'Newest First', value: 'created-desc' });
-		sortToggle.createEl('option', { text: 'Oldest First', value: 'created-asc' });
-		sortToggle.createEl('option', { text: 'By Author', value: 'author' });
-		sortToggle.createEl('option', { text: 'By Hashtags', value: 'hashtags' });
+		sortToggle.createEl('option', { text: 'Newest first', value: 'created-desc' });
+		sortToggle.createEl('option', { text: 'Oldest first', value: 'created-asc' });
+		sortToggle.createEl('option', { text: 'By author', value: 'author' });
+		sortToggle.createEl('option', { text: 'By hashtags', value: 'hashtags' });
 		sortToggle.value = this.plugin.settings.reviewQueueDefaultSort;
 		this.sortMode = this.plugin.settings.reviewQueueDefaultSort;
 		sortToggle.addEventListener('change', async () => {
@@ -4168,13 +4212,13 @@ class TikTokReviewView extends ItemView {
 
 		// Quick Notes section
 		this.quickNotesDiv = scrollableWrapper.createDiv({ cls: 'tiktoker-review-quick-notes' });
-		this.quickNotesDiv.createEl('label', { text: 'Quick Note:', cls: 'tiktoker-review-quick-notes-label' });
+		this.quickNotesDiv.createEl('label', { text: 'Quick note:', cls: 'tiktoker-review-quick-notes-label' });
 		this.quickNotesTextarea = this.quickNotesDiv.createEl('textarea', {
 			cls: 'tiktoker-review-quick-notes-textarea',
 			attr: { placeholder: 'Add a note about this TikTok...' }
 		});
 		this.addNoteButton = this.quickNotesDiv.createEl('button', {
-			text: 'Add Note',
+			text: 'Add note',
 			cls: 'mod-cta'
 		});
 		this.addNoteButton.addEventListener('click', () => this.addQuickNote());
@@ -4243,7 +4287,7 @@ class TikTokReviewView extends ItemView {
 		if (!this.plugin.settings.reviewQueueShowProgressBar || !this.progressBarDiv) return;
 
 		const percentage = this.queue.length > 0 ? ((this.currentIndex + 1) / this.queue.length) * 100 : 0;
-		const progressFill = this.progressBarDiv.querySelector('.tiktok-review-progress-fill') as HTMLElement;
+		const progressFill = this.progressBarDiv.querySelector('.tiktoker-review-progress-fill') as HTMLElement;
 		if (progressFill) {
 			progressFill.style.width = `${percentage}%`;
 		}
@@ -4273,7 +4317,7 @@ class TikTokReviewView extends ItemView {
 		this.updateProgressBar();
 	}
 
-	async updateButtonStates() {
+	updateButtonStates() {
 		if (this.queue.length === 0) return;
 
 		const currentFile = this.queue[this.currentIndex];
@@ -4466,8 +4510,13 @@ class TikTokReviewView extends ItemView {
 
 		this.embedDiv.empty();
 		if (iframeMatch) {
-			this.embedDiv.innerHTML = iframeMatch[0];
-			// For iframe embeds, no script needed
+			// Parse and insert embed HTML using DOM parser for safety
+			const parser = new DOMParser();
+			const doc = parser.parseFromString(iframeMatch[0], 'text/html');
+			const embedContent = doc.body.firstChild;
+			if (embedContent) {
+				this.embedDiv.appendChild(document.importNode(embedContent, true));
+			}
 			// For blockquote embeds, reload TikTok embed script
 			if (iframeMatch[0].includes('blockquote')) {
 				const script = document.createElement('script');
@@ -4560,8 +4609,8 @@ class TikTokReviewView extends ItemView {
 			});
 
 			const saveButton = this.noteContentDiv.createEl('button', {
-				text: 'Save Changes',
-				cls: 'mod-cta tiktok-review-save-button'
+				text: 'Save changes',
+				cls: 'mod-cta tiktoker-review-save-button'
 			});
 
 			saveButton.addEventListener('click', async () => {
@@ -4889,7 +4938,7 @@ class TikTokReviewView extends ItemView {
 
 		// Add "No Session" option
 		const noSessionOpt = this.sessionDropdown.createEl('option', {
-			text: 'No Session (Temporary Filter)',
+			text: 'No session (temporary filter)',
 			value: ''
 		});
 
@@ -4979,7 +5028,7 @@ class TikTokReviewView extends ItemView {
 		}
 	}
 
-	async createNewSession() {
+	createNewSession() {
 		const modal = new SessionNameModal(this.app, '', async (name) => {
 			if (!name.trim()) {
 				new Notice('Session name cannot be empty');
@@ -5060,13 +5109,13 @@ class TikTokReviewView extends ItemView {
 		}
 	}
 
-	async onFilterChange() {
+	onFilterChange() {
 		// Debounce filter changes
-		if ((this as any).filterTimeout) {
-			window.clearTimeout((this as any).filterTimeout);
+		if (this.filterTimeout) {
+			window.clearTimeout(this.filterTimeout);
 		}
 
-		(this as any).filterTimeout = window.setTimeout(async () => {
+		this.filterTimeout = window.setTimeout(async () => {
 			this.hashtagFilter = this.hashtagFilterInput.value.trim();
 			this.textFilter = this.textFilterInput.value.trim();
 
@@ -5198,7 +5247,7 @@ class SessionNameModal extends Modal {
 		const inputContainer = contentEl.createDiv({cls: 'session-name-input-container'});
 		inputContainer.style.cssText = 'margin: 20px 0;';
 
-		const label = inputContainer.createEl('label', {text: 'Session Name:'});
+		const label = inputContainer.createEl('label', {text: 'Session name:'});
 		label.style.cssText = 'display: block; margin-bottom: 8px; font-weight: 500;';
 
 		this.nameInput = inputContainer.createEl('input', {
@@ -5251,10 +5300,10 @@ class SessionNameModal extends Modal {
 
 // SessionManagementModal - Modal for managing all sessions
 class SessionManagementModal extends Modal {
-	plugin: any;
-	view: any;
+	plugin: TikTokerPlugin;
+	view: TikTokReviewView;
 
-	constructor(app: App, plugin: any, view: any) {
+	constructor(app: App, plugin: TikTokerPlugin, view: TikTokReviewView) {
 		super(app);
 		this.plugin = plugin;
 		this.view = view;
@@ -5269,7 +5318,7 @@ class SessionManagementModal extends Modal {
 		const {contentEl} = this;
 		contentEl.empty();
 
-		contentEl.createEl('h2', {text: 'Manage Review Sessions'});
+		contentEl.createEl('h2', {text: 'Manage review sessions'});
 
 		const sessions = this.plugin.settings.reviewSessions || [];
 
@@ -5357,9 +5406,9 @@ class SessionManagementModal extends Modal {
 				this.renderContent();
 
 				// Update view if this is the current session
-				if (this.view && this.view.currentSession?.id === session.id) {
-					this.view.currentSession.name = newName;
-					this.view.updateSessionDisplay();
+				if (this.view && this.view.activeSession?.id === session.id) {
+					this.view.activeSession.name = newName;
+					this.view.updateSessionInfo();
 				}
 			}
 		});
@@ -5369,7 +5418,7 @@ class SessionManagementModal extends Modal {
 	handleReset(session: ReviewSession) {
 		const confirmModal = new Modal(this.app);
 		confirmModal.contentEl.empty();
-		confirmModal.contentEl.createEl('h2', {text: 'Reset Session?'});
+		confirmModal.contentEl.createEl('h2', {text: 'Reset session?'});
 		confirmModal.contentEl.createEl('p', {text: `Are you sure you want to reset the session "${session.name}"?`});
 		confirmModal.contentEl.createEl('p', {text: 'This will clear all reviewed files and filters, but keep the session.'});
 
@@ -5394,13 +5443,12 @@ class SessionManagementModal extends Modal {
 				this.renderContent();
 
 				// Update view if this is the current session
-				if (this.view && this.view.currentSession?.id === session.id) {
-					this.view.currentSession.reviewedFiles = [];
-					this.view.currentSession.hashtagFilter = '';
-					this.view.currentSession.textFilter = '';
-					this.view.reviewedFiles = new Set();
-					this.view.updateSessionDisplay();
-					this.view.loadReviewFiles();
+				if (this.view && this.view.activeSession?.id === session.id) {
+					this.view.activeSession.reviewedFiles = [];
+					this.view.activeSession.hashtagFilter = '';
+					this.view.activeSession.textFilter = '';
+					this.view.updateSessionInfo();
+					void this.view.loadQueue();
 				}
 			}
 		};
@@ -5411,7 +5459,7 @@ class SessionManagementModal extends Modal {
 	handleDelete(session: ReviewSession) {
 		const confirmModal = new Modal(this.app);
 		confirmModal.contentEl.empty();
-		confirmModal.contentEl.createEl('h2', {text: 'Delete Session?'});
+		confirmModal.contentEl.createEl('h2', {text: 'Delete session?'});
 		confirmModal.contentEl.createEl('p', {text: `Are you sure you want to delete the session "${session.name}"?`});
 		confirmModal.contentEl.createEl('p', {
 			text: 'This action cannot be undone.',
@@ -5438,11 +5486,10 @@ class SessionManagementModal extends Modal {
 				this.renderContent();
 
 				// If this was the current session in the view, clear it
-				if (this.view && this.view.currentSession?.id === session.id) {
-					this.view.currentSession = null;
-					this.view.reviewedFiles = new Set();
-					this.view.updateSessionDisplay();
-					this.view.loadReviewFiles();
+				if (this.view && this.view.activeSession?.id === session.id) {
+					this.view.activeSession = null;
+					this.view.updateSessionInfo();
+					void this.view.loadQueue();
 				}
 			}
 		};

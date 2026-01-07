@@ -34,8 +34,8 @@ export class ScriptInstaller {
 		}
 
 		try {
-			const fs = require('fs');
-			const path = require('path');
+			const fs = window.require('fs') as typeof import('fs');
+			const path = window.require('path') as typeof import('path');
 
 			// Step 1: Get latest release info
 			progressCallback?.({ percent: 10, status: 'Checking latest version...' });
@@ -134,8 +134,8 @@ export class ScriptInstaller {
 	}
 
 	private async extractZip(buffer: ArrayBuffer, targetPath: string): Promise<void> {
-		const fs = require('fs');
-		const path = require('path');
+		const fs = window.require('fs') as typeof import('fs');
+		const path = window.require('path') as typeof import('path');
 
 		const zip = await JSZip.loadAsync(buffer);
 
@@ -164,14 +164,14 @@ export class ScriptInstaller {
 		}
 	}
 
-	async verifyScripts(): Promise<boolean> {
+	verifyScripts(): boolean {
 		if (Platform.isMobile) {
 			return false;
 		}
 
 		try {
-			const fs = require('fs');
-			const path = require('path');
+			const fs = window.require('fs') as typeof import('fs');
+			const path = window.require('path') as typeof import('path');
 
 			const requiredScripts = [
 				'tiktok2text.sh',
@@ -201,7 +201,7 @@ export class ScriptInstaller {
 		}
 
 		try {
-			const path = require('path');
+			const path = window.require('path') as typeof import('path');
 			return path.join(this.scriptsDir, 'tiktok2text.sh');
 		} catch (error) {
 			return null;

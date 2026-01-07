@@ -1,5 +1,11 @@
 import { App, Editor, MarkdownView, Modal, Notice, Platform, TFile } from 'obsidian';
 
+// Simple data interface for transcription modal display
+interface TranscriptionModalData {
+	author: string;
+	url: string;
+}
+
 export interface TranscriptionSettings {
 	transcriptionApi: 'none' | 'whisper-local' | 'assemblyai';
 	whisperScriptPath: string;
@@ -19,17 +25,17 @@ export class TranscriptionService {
 	app: App;
 	settings: TranscriptionSettings;
 	activeTranscriptionModal: SingleTranscriptionModal | null = null;
-	debugLogCallback?: (message: string, ...args: any[]) => void;
+	debugLogCallback?: (message: string, ...args: unknown[]) => void;
 	openInstallerCallback?: () => void;
 
-	constructor(app: App, settings: TranscriptionSettings, debugLogCallback?: (message: string, ...args: any[]) => void, openInstallerCallback?: () => void) {
+	constructor(app: App, settings: TranscriptionSettings, debugLogCallback?: (message: string, ...args: unknown[]) => void, openInstallerCallback?: () => void) {
 		this.app = app;
 		this.settings = settings;
 		this.debugLogCallback = debugLogCallback;
 		this.openInstallerCallback = openInstallerCallback;
 	}
 
-	private debugLog(message: string, ...args: any[]): void {
+	private debugLog(message: string, ...args: unknown[]): void {
 		if (this.debugLogCallback) {
 			this.debugLogCallback(message, ...args);
 		}
@@ -64,7 +70,7 @@ export class TranscriptionService {
 		}
 
 		const content = editor.getValue();
-		const tiktokUrlPattern = /https:\/\/(?:www\.|vm\.)?tiktok\.com\/[^\s\)]+/g;
+		const tiktokUrlPattern = /https:\/\/(?:www\.|vm\.)?tiktok\.com\/[^\s)]+/g;
 		const matches = content.match(tiktokUrlPattern);
 
 		if (!matches || matches.length === 0) {
@@ -98,12 +104,12 @@ export class TranscriptionService {
 		}
 
 		try {
-			const { exec } = require('child_process');
-			const { promisify } = require('util');
-			const fs = require('fs');
-			const path = require('path');
+			const childProcess = window.require('child_process') as typeof import('child_process');
+			const util = window.require('util') as typeof import('util');
+			const fs = window.require('fs') as typeof import('fs');
+			const path = window.require('path') as typeof import('path');
 
-			const execAsync = promisify(exec);
+			const execAsync = util.promisify(childProcess.exec);
 
 			if (!fs.existsSync(this.settings.whisperScriptPath)) {
 				throw new Error('Whisper script not found at configured path');
@@ -245,7 +251,7 @@ export class TranscriptionService {
 		}
 	}
 
-	async showSingleTranscriptionModal(url: string, videoId: string | null, filePath: string, data: any): Promise<void> {
+	async showSingleTranscriptionModal(url: string, videoId: string | null, filePath: string, data: TranscriptionModalData): Promise<void> {
 		if (this.activeTranscriptionModal) {
 			this.activeTranscriptionModal.close();
 		}
@@ -341,12 +347,12 @@ export class TranscriptionService {
 		}
 
 		try {
-			const { exec } = require('child_process');
-			const { promisify } = require('util');
-			const fs = require('fs');
-			const path = require('path');
+			const childProcess = window.require('child_process') as typeof import('child_process');
+			const util = window.require('util') as typeof import('util');
+			const fs = window.require('fs') as typeof import('fs');
+			const path = window.require('path') as typeof import('path');
 
-			const execAsync = promisify(exec);
+			const execAsync = util.promisify(childProcess.exec);
 
 			if (!this.settings.whisperScriptPath) {
 				if (!isBulkProcessing) {
@@ -519,19 +525,19 @@ export class TranscriptionService {
 
 export class SingleTranscriptionModal extends Modal {
 	fileName: string;
-	data: any;
+	data: TranscriptionModalData;
 	statusText: HTMLSpanElement;
 	timeText: HTMLSpanElement;
 	progressBar: HTMLDivElement;
 	startTime: number;
 	isMinimized: boolean = false;
-	interval: any;
+	interval: number;
 	service: TranscriptionService;
 	content: HTMLDivElement | null = null;
 	minimizeBtn: HTMLButtonElement | null = null;
 	shouldAllowClose: boolean = false;
 
-	constructor(app: App, fileName: string, data: any, service: TranscriptionService) {
+	constructor(app: App, fileName: string, data: TranscriptionModalData, service: TranscriptionService) {
 		super(app);
 		this.fileName = fileName;
 		this.data = data;

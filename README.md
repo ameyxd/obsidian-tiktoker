@@ -97,6 +97,10 @@ The plugin supports the following template variables:
 
 TikToker includes local transcription powered by OpenAI's Whisper model. This feature is desktop-only and requires a one-time setup.
 
+### Disclosure
+
+**External Dependencies:** The transcription feature requires the installation of external software packages on your system, including Python 3, yt-dlp, ffmpeg, and faster-whisper. These are installed separately from the plugin and run locally on your computer. The plugin provides a one-click installer script that downloads and configures these dependencies. By using the transcription feature, you acknowledge that these external packages will be installed on your system. The plugin does not install any packages without your explicit action (clicking "Install" in the setup dialog).
+
 ### First-Time Setup
 
 When you first load the plugin, you'll see a notice prompting you to install transcription scripts. You can also trigger installation manually via:

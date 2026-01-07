@@ -22,7 +22,7 @@ export class ScriptInstallationModal extends Modal {
 		contentEl.addClass('tiktoker-install-modal');
 
 		// Title
-		contentEl.createEl('h2', { text: 'Transcription Scripts Installation' });
+		contentEl.createEl('h2', { text: 'Transcription scripts installation' });
 
 		// Content container
 		this.contentContainer = contentEl.createDiv({ cls: 'install-modal-content' });
@@ -65,7 +65,7 @@ export class ScriptInstallationModal extends Modal {
 
 		// Manual install button
 		const manualBtn = this.buttonContainer.createEl('button', {
-			text: 'Manual Instructions'
+			text: 'Manual instructions'
 		});
 		manualBtn.style.flex = '1';
 		manualBtn.onclick = () => this.showManualInstructions();
@@ -151,7 +151,7 @@ export class ScriptInstallationModal extends Modal {
 			margin-bottom: 16px;
 		`;
 
-		successDiv.createEl('h3', { text: 'Installation Complete!' });
+		successDiv.createEl('h3', { text: 'Installation complete!' });
 		successDiv.createEl('p', {
 			text: 'Transcription scripts have been installed successfully.'
 		});
@@ -161,7 +161,7 @@ export class ScriptInstallationModal extends Modal {
 
 		// Test Setup button
 		const testBtn = buttonContainer.createEl('button', {
-			text: 'Test Setup',
+			text: 'Test setup',
 			cls: 'mod-cta'
 		});
 		testBtn.onclick = () => {
@@ -193,7 +193,7 @@ export class ScriptInstallationModal extends Modal {
 			text-align: center;
 		`;
 
-		errorDiv.createEl('h3', { text: 'Installation Failed' }).style.textAlign = 'center';
+		errorDiv.createEl('h3', { text: 'Installation failed' }).style.textAlign = 'center';
 
 		const errorMsg = errorDiv.createEl('p', { text: errorMessage });
 		errorMsg.style.cssText = 'color: var(--text-error); margin: 12px 0;';
@@ -215,7 +215,7 @@ export class ScriptInstallationModal extends Modal {
 
 		// Manual instructions button
 		const manualBtn = buttonContainer.createEl('button', {
-			text: 'Manual Instructions'
+			text: 'Manual instructions'
 		});
 		manualBtn.style.flex = '1';
 		manualBtn.onclick = () => this.showManualInstructions();
@@ -235,7 +235,7 @@ export class ScriptInstallationModal extends Modal {
 
 		const instructionsDiv = this.contentContainer.createDiv({ cls: 'install-manual' });
 
-		instructionsDiv.createEl('h3', { text: 'Manual Installation' });
+		instructionsDiv.createEl('h3', { text: 'Manual installation' });
 
 		const instructions = instructionsDiv.createDiv();
 		instructions.style.cssText = 'margin: 16px 0; line-height: 1.6;';
@@ -258,7 +258,7 @@ export class ScriptInstallationModal extends Modal {
 		pathDiv.textContent = this.installer.getPluginPath();
 
 		const copyBtn = instructions.createEl('button', {
-			text: 'Copy Plugin Path',
+			text: 'Copy plugin path',
 			cls: 'mod-cta'
 		});
 		copyBtn.style.cssText = 'margin: 0 0 16px 20px;';

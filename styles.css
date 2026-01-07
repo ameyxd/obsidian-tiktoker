@@ -133,7 +133,7 @@ If your plugin does not need CSS, delete this file.
 }
 
 /* Duplicate URLs styling */
-.tiktoker-duplicate-urls, .slideshow-urls, .private-urls, .fallback-urls {
+.tiktoker-duplicate-urls, .tiktoker-slideshow-urls, .tiktoker-private-urls, .tiktoker-fallback-urls {
 	max-height: 200px;
 	overflow-y: auto;
 	border: 1px solid var(--background-modifier-border);
@@ -187,18 +187,18 @@ If your plugin does not need CSS, delete this file.
 }
 
 /* Slideshow and private item styles */
-.tiktoker-slideshow-item, .private-item, .fallback-item {
+.tiktoker-slideshow-item, .tiktoker-private-item, .tiktoker-fallback-item {
 	margin-bottom: 8px;
 	display: flex;
 	align-items: center;
 	opacity: 0.9;
 }
 
-.tiktoker-slideshow-item .icon, .private-item .icon, .fallback-item .icon {
+.tiktoker-slideshow-item .icon, .tiktoker-private-item .icon, .tiktoker-fallback-item .icon {
 	margin-right: 8px;
 }
 
-.tiktoker-slideshow-item .url, .private-item .url, .fallback-item .url {
+.tiktoker-slideshow-item .url, .tiktoker-private-item .url, .tiktoker-fallback-item .url {
 	font-size: 0.8em;
 }
 
@@ -552,7 +552,7 @@ If your plugin does not need CSS, delete this file.
 }
 
 /* Layout Option A: Sticky Footer */
-.tiktoker-review-layout-sticky .tiktok-review-controls-wrapper {
+.tiktoker-review-layout-sticky .tiktoker-review-controls-wrapper {
 	position: sticky;
 	bottom: 0;
 	background: var(--background-primary);
@@ -563,19 +563,19 @@ If your plugin does not need CSS, delete this file.
 }
 
 /* Layout Option B: Scroll Container */
-.tiktoker-review-layout-scroll .tiktok-review-scrollable {
+.tiktoker-review-layout-scroll .tiktoker-review-scrollable {
 	max-height: calc(100vh - 400px);
 	overflow-y: auto;
 	margin-bottom: 12px;
 	padding-right: 8px;
 }
-.tiktoker-review-layout-scroll .tiktok-review-controls-wrapper {
+.tiktoker-review-layout-scroll .tiktoker-review-controls-wrapper {
 	padding-top: 12px;
 	border-top: 2px solid var(--background-modifier-border);
 }
 
 /* Layout Option C: Floating Action Bar */
-.tiktoker-review-layout-floating .tiktok-review-controls-wrapper {
+.tiktoker-review-layout-floating .tiktoker-review-controls-wrapper {
 	position: fixed;
 	bottom: 20px;
 	right: 20px;
@@ -588,11 +588,614 @@ If your plugin does not need CSS, delete this file.
 	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 	z-index: 100;
 }
-.tiktoker-review-layout-floating .tiktok-review-controls-wrapper:hover {
+.tiktoker-review-layout-floating .tiktoker-review-controls-wrapper:hover {
 	box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
 }
-.tiktoker-review-layout-floating .tiktok-review-nav-controls,
-.tiktoker-review-layout-floating .tiktok-review-status-controls {
+.tiktoker-review-layout-floating .tiktoker-review-nav-controls,
+.tiktoker-review-layout-floating .tiktoker-review-status-controls {
 	margin-bottom: 8px;
 }
-		`;
+
+/* Dependency Check Modal Styles */
+.tiktoker-result-container {
+	padding: 16px;
+	background-color: var(--background-secondary);
+	border-radius: 8px;
+	margin-bottom: 16px;
+}
+
+.tiktoker-button-container-end {
+	margin-top: 16px;
+	display: flex;
+	justify-content: flex-end;
+}
+
+.tiktoker-button-container-gap {
+	margin-top: 20px;
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+}
+
+.tiktoker-status-section {
+	margin: 16px 0;
+	padding: 16px;
+	background-color: var(--background-secondary);
+	border-radius: 4px;
+}
+
+.tiktoker-status-success {
+	color: var(--interactive-success);
+	font-weight: 600;
+	margin-bottom: 12px;
+}
+
+.tiktoker-status-warning {
+	color: var(--text-warning);
+	font-weight: 600;
+	margin-bottom: 12px;
+}
+
+.tiktoker-dep-list {
+	font-family: var(--font-monospace);
+	font-size: 0.9em;
+}
+
+.tiktoker-dep-line {
+	margin: 4px 0;
+}
+
+.tiktoker-dep-success {
+	color: var(--interactive-success);
+}
+
+.tiktoker-dep-error {
+	color: var(--text-error);
+}
+
+.tiktoker-install-section {
+	margin: 16px 0;
+}
+
+.tiktoker-instructions {
+	padding: 16px;
+	background-color: var(--background-secondary);
+	border-radius: 4px;
+}
+
+.tiktoker-homebrew-note {
+	margin-bottom: 16px;
+	padding: 12px;
+	background-color: var(--background-modifier-border);
+	border-radius: 4px;
+}
+
+.tiktoker-code-block {
+	font-size: 0.85em;
+	padding: 8px 12px;
+	background: var(--background-primary);
+	border-radius: 3px;
+	display: block;
+	margin-bottom: 8px;
+}
+
+.tiktoker-code-inline {
+	font-size: 0.85em;
+	padding: 4px 8px;
+	background: var(--background-primary);
+	border-radius: 3px;
+	display: block;
+	margin: 8px 0;
+}
+
+.tiktoker-details-section {
+	margin-top: 16px;
+}
+
+.tiktoker-details-toggle {
+	cursor: pointer;
+	padding: 8px;
+	background-color: var(--background-secondary);
+	border-radius: 4px;
+	user-select: none;
+}
+
+.tiktoker-details-content {
+	display: none;
+	margin-top: 8px;
+	padding: 12px;
+	background-color: var(--background-secondary);
+	border-radius: 4px;
+	font-family: var(--font-monospace);
+	font-size: 0.85em;
+	white-space: pre-wrap;
+	max-height: 200px;
+	overflow-y: auto;
+}
+
+.tiktoker-details-content.expanded {
+	display: block;
+}
+
+.tiktoker-venv-note {
+	margin-top: 16px;
+	padding: 12px;
+	background-color: var(--background-modifier-border);
+	border-radius: 4px;
+}
+
+.tiktoker-install-block {
+	margin: 12px 0;
+	padding: 12px;
+	background-color: var(--background-modifier-border);
+	border-radius: 4px;
+}
+
+.tiktoker-install-block-name {
+	font-weight: 600;
+	margin-bottom: 8px;
+}
+
+/* Settings Tab Styles */
+.tiktoker-tab-nav {
+	display: flex;
+	gap: 4px;
+	padding: 8px;
+	background: var(--background-secondary);
+	border-radius: 6px;
+	margin-bottom: 24px;
+}
+
+.tiktoker-tab-button {
+	padding: 10px 20px;
+	background: transparent;
+	border: none;
+	border-radius: 4px;
+	cursor: pointer;
+	transition: all 0.15s ease;
+	font-size: 0.95em;
+	font-weight: 500;
+	color: var(--text-muted);
+}
+
+.tiktoker-tab-button:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.tiktoker-tab-button.active {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.tiktoker-section-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	cursor: pointer;
+	padding: 12px;
+	background: var(--background-secondary);
+	border-radius: 4px;
+	margin-bottom: 8px;
+}
+
+.tiktoker-section-header:hover {
+	background: var(--background-modifier-hover);
+}
+
+.tiktoker-arrow {
+	font-size: 0.8em;
+}
+
+.tiktoker-info-box {
+	margin-bottom: 24px;
+	padding: 12px;
+	background-color: var(--background-secondary);
+	border-radius: 4px;
+}
+
+.tiktoker-mobile-note {
+	margin-bottom: 24px;
+	padding: 12px;
+	background-color: var(--background-modifier-error-hover);
+	border-radius: 4px;
+	border-left: 4px solid var(--interactive-accent);
+}
+
+.tiktoker-banner {
+	margin-bottom: 16px;
+	padding: 12px;
+	border-radius: 4px;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+
+.tiktoker-banner-success {
+	background-color: var(--background-success);
+	border-left: 4px solid var(--text-success);
+}
+
+.tiktoker-banner-warning {
+	background-color: var(--background-modifier-error);
+	border-left: 4px solid var(--text-warning);
+}
+
+.tiktoker-success-icon {
+	color: var(--text-success);
+}
+
+.tiktoker-warning-icon {
+	color: var(--text-warning);
+}
+
+.tiktoker-flex-1 {
+	flex: 1;
+}
+
+.tiktoker-button-group {
+	display: flex;
+	gap: 8px;
+}
+
+.tiktoker-dismiss-btn {
+	padding: 4px 8px;
+	background: transparent;
+	border: none;
+	cursor: pointer;
+	color: var(--text-muted);
+}
+
+.tiktoker-disclaimer {
+	margin-top: -10px;
+	margin-bottom: 15px;
+	padding: 10px;
+	background-color: var(--background-secondary);
+	border-left: 3px solid var(--interactive-accent);
+	font-size: 0.9em;
+}
+
+/* Model Info Table Styles */
+.tiktoker-model-info {
+	margin-bottom: 16px;
+	padding: 12px;
+	background-color: var(--background-secondary);
+	border-radius: 4px;
+	font-size: 0.9em;
+}
+
+.tiktoker-model-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-family: var(--font-monospace);
+}
+
+.tiktoker-model-table th {
+	text-align: left;
+	padding: 4px 8px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.tiktoker-model-table td {
+	padding: 4px 8px;
+}
+
+.tiktoker-model-table .highlight {
+	font-weight: 600;
+	color: var(--interactive-accent);
+}
+
+.tiktoker-recommendation {
+	margin-top: 8px;
+	font-style: italic;
+}
+
+/* Toast Styles */
+.tiktoker-toast {
+	position: fixed;
+	bottom: 20px;
+	right: 20px;
+	width: 280px;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+	z-index: 10000;
+	font-family: var(--font-interface);
+	transition: all 0.3s ease;
+}
+
+.tiktoker-toast-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	padding: 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.tiktoker-toast-title {
+	font-weight: 600;
+	font-size: 0.9em;
+	color: var(--text-normal);
+}
+
+.tiktoker-toast-filename {
+	font-size: 0.8em;
+	color: var(--text-muted);
+	margin-top: 2px;
+	word-break: break-all;
+}
+
+.tiktoker-toast-collapse {
+	background: transparent;
+	border: none;
+	color: var(--text-muted);
+	cursor: pointer;
+	padding: 4px;
+	font-size: 0.9em;
+}
+
+.tiktoker-toast-content {
+	padding: 12px;
+}
+
+.tiktoker-toast-status {
+	font-size: 0.85em;
+	color: var(--text-muted);
+	margin-bottom: 8px;
+}
+
+.tiktoker-toast-time {
+	font-size: 0.8em;
+	color: var(--text-muted);
+	margin-bottom: 8px;
+}
+
+.tiktoker-toast-progress-container {
+	height: 4px;
+	background: var(--background-modifier-border);
+	border-radius: 2px;
+	overflow: hidden;
+}
+
+.tiktoker-toast-progress {
+	height: 100%;
+	background: var(--interactive-accent);
+	width: 0%;
+	transition: width 0.3s ease;
+}
+
+/* Session Management Modal Styles */
+.tiktoker-sessions-container {
+	max-height: 400px;
+	overflow-y: auto;
+	margin: 20px 0;
+}
+
+.tiktoker-session-item {
+	padding: 12px;
+	margin-bottom: 8px;
+	background-color: var(--background-secondary);
+	border-radius: 4px;
+	border: 1px solid var(--background-modifier-border);
+}
+
+.tiktoker-session-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 8px;
+}
+
+.tiktoker-session-name {
+	font-size: 1.1em;
+}
+
+.tiktoker-session-actions {
+	display: flex;
+	gap: 8px;
+}
+
+.tiktoker-session-details {
+	font-size: 0.9em;
+	color: var(--text-muted);
+}
+
+.tiktoker-empty-message {
+	padding: 20px;
+	text-align: center;
+	color: var(--text-muted);
+}
+
+.tiktoker-input-container {
+	margin: 20px 0;
+}
+
+.tiktoker-input-label {
+	display: block;
+	margin-bottom: 8px;
+	font-weight: 500;
+}
+
+.tiktoker-input-field {
+	width: 100%;
+	padding: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background-color: var(--background-primary);
+}
+
+.tiktoker-error-text-inline {
+	color: var(--text-error);
+	font-weight: 500;
+}
+
+.tiktoker-cursor-pointer {
+	cursor: pointer;
+}
+
+.tiktoker-font-bold {
+	font-weight: 600;
+}
+
+.tiktoker-section-margin {
+	margin-bottom: 24px;
+}
+
+/* Additional Utility Classes for Inline Style Replacement */
+.tiktoker-notice-clickable {
+	cursor: pointer;
+}
+
+.tiktoker-mr-8 {
+	margin-right: 8px;
+}
+
+.tiktoker-ml-12 {
+	margin-left: 12px;
+}
+
+.tiktoker-bg-success {
+	background-color: var(--interactive-success);
+}
+
+.tiktoker-brew-btn {
+	margin-top: 8px;
+}
+
+.tiktoker-font-bold {
+	font-weight: 600;
+}
+
+/* Display utilities */
+.tiktoker-hidden {
+	display: none;
+}
+
+.tiktoker-block {
+	display: block;
+}
+
+/* Progress bar dynamic styles */
+.tiktoker-progress-complete {
+	width: 100%;
+}
+
+.tiktoker-progress-error {
+	background-color: var(--text-error);
+}
+
+.tiktoker-text-success {
+	color: var(--text-success);
+}
+
+.tiktoker-text-error {
+	color: var(--text-error);
+}
+
+/* Toast collapsed state */
+.tiktoker-toast-collapsed {
+	width: 200px;
+}
+
+.tiktoker-toast-expanded {
+	width: 280px;
+}
+
+.tiktoker-opacity-0 {
+	opacity: 0;
+}
+
+/* Dependency Check Result Container */
+.tiktoker-dep-result-container {
+	padding: 16px;
+	background-color: var(--background-secondary);
+	border-radius: 8px;
+	margin-bottom: 16px;
+}
+
+/* Settings banner content */
+.tiktoker-banner-content {
+	flex: 1;
+}
+
+/* Variables info */
+.tiktoker-variables-info {
+	margin-bottom: 24px;
+	padding: 12px;
+	background-color: var(--background-secondary);
+	border-radius: 4px;
+}
+
+/* Dataview modal */
+.tiktoker-dataview-button-container {
+	display: flex;
+	gap: 8px;
+	justify-content: flex-end;
+	margin-top: 16px;
+}
+
+/* Rename modal */
+.tiktoker-rename-input-container {
+	margin: 20px 0;
+}
+
+.tiktoker-rename-label {
+	display: block;
+	margin-bottom: 8px;
+	font-weight: 500;
+}
+
+.tiktoker-rename-input {
+	width: 100%;
+	padding: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background-color: var(--background-primary);
+}
+
+/* Close button container */
+.tiktoker-close-button-container {
+	margin-top: 20px;
+	display: flex;
+	justify-content: flex-end;
+}
+
+/* Delete confirmation modal */
+.tiktoker-delete-warning {
+	color: var(--text-error);
+	font-weight: 500;
+}
+
+/* Transcription test result */
+.tiktoker-test-result {
+	padding: 16px;
+	background-color: var(--background-secondary);
+	border-radius: 4px;
+	font-family: var(--font-monospace);
+	font-size: 0.9em;
+	white-space: pre-wrap;
+	max-height: 400px;
+	overflow-y: auto;
+}
+
+/* Collapsible Section Styles */
+.tiktoker-collapsible-section {
+	margin-bottom: 24px;
+}
+
+.tiktoker-collapsible-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	cursor: pointer;
+	padding: 8px 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+	margin-bottom: 16px;
+	font-weight: 600;
+	font-size: 1.1em;
+}
+
+.tiktoker-collapsible-arrow {
+	font-size: 0.8em;
+}
