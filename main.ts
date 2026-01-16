@@ -321,14 +321,14 @@ export default class TikTokerPlugin extends Plugin {
 		);
 
 		this.addRibbonIcon('video', 'Read TikTok from clipboard', () => {
-			this.processTikTokFromClipboard();
+			void this.processTikTokFromClipboard();
 		});
 
 		this.addCommand({
 			id: 'read-tiktok-clipboard',
 			name: 'Read TikTok from clipboard',
 			callback: () => {
-				this.processTikTokFromClipboard();
+				void this.processTikTokFromClipboard();
 			}
 		});
 
@@ -337,13 +337,13 @@ export default class TikTokerPlugin extends Plugin {
 			id: 'transcribe-tiktok',
 			name: 'Transcribe TikTok in current note',
 			editorCallback: (editor: Editor, view: MarkdownView) => {
-				this.transcriptionService.transcribeInNote(editor, view);
+				void this.transcriptionService.transcribeInNote(editor, view);
 			},
 			editorCheckCallback: (checking: boolean, editor: Editor, view: MarkdownView) => {
 				if (checking) {
 					return view.getMode() === 'source' || view.getMode() === 'preview';
 				}
-				this.transcriptionService.transcribeInNote(editor, view);
+				void this.transcriptionService.transcribeInNote(editor, view);
 				return true;
 			}
 		});
@@ -352,7 +352,7 @@ export default class TikTokerPlugin extends Plugin {
 			id: 'start-tiktok-review',
 			name: 'Start TikTok Review Session',
 			callback: () => {
-				this.activateReviewView();
+				void this.activateReviewView();
 			}
 		});
 
@@ -368,7 +368,7 @@ export default class TikTokerPlugin extends Plugin {
 			id: 'test-transcription-setup',
 			name: 'Test Transcription Setup',
 			callback: () => {
-				this.testTranscriptionSetup();
+				void this.testTranscriptionSetup();
 			}
 		});
 
@@ -393,21 +393,22 @@ export default class TikTokerPlugin extends Plugin {
 
 		// Register mobile share menu integration
 		this.registerEvent(
-			this.app.workspace.on('receive-text-menu' as any, (menu: Menu, shareText: string) => {
+			// @ts-expect-error - undocumented Obsidian mobile event
+			this.app.workspace.on('receive-text-menu', (menu: Menu, shareText: string) => {
 				menu.addItem((item: MenuItem) => {
 					item.setTitle('TikToker');
 					item.setIcon('video');
 					item.onClick(async () => {
 						// Write shared text to clipboard so processTikTokFromClipboard can read it
 						await navigator.clipboard.writeText(shareText);
-						this.processTikTokFromClipboard();
+						void this.processTikTokFromClipboard();
 					});
 				});
 			})
 		);
 
 		this.registerEvent(
-			this.app.workspace.on('url-menu' as any, (menu: Menu, url: string) => {
+			this.app.workspace.on('url-menu', (menu: Menu, url: string) => {
 				if (this.isTikTokUrl(url)) {
 					menu.addItem((item: MenuItem) => {
 						item.setTitle('TikToker');
@@ -415,7 +416,7 @@ export default class TikTokerPlugin extends Plugin {
 						item.onClick(async () => {
 							// Write URL to clipboard so processTikTokFromClipboard can read it
 							await navigator.clipboard.writeText(url);
-							this.processTikTokFromClipboard();
+							void this.processTikTokFromClipboard();
 						});
 					});
 				}
@@ -469,7 +470,7 @@ export default class TikTokerPlugin extends Plugin {
 			if (this.shouldShowBulkModal(tikTokUrls)) {
 				// Show bulk processing modal
 				const modal = new BulkProcessingModal(this.app, tikTokUrls, (selectedUrls, enableTranscription) => {
-					this.processBulkTikToks(selectedUrls, enableTranscription);
+					void this.processBulkTikToks(selectedUrls, enableTranscription);
 				}, this.settings.transcriptionDefaultForBulk);
 				modal.open();
 			} else {
@@ -885,7 +886,7 @@ export default class TikTokerPlugin extends Plugin {
 		};
 	}
 
-	private detectPrivateVideo(error: Error | unknown, _url: string): boolean {
+	private detectPrivateVideo(error: unknown, _url: string): boolean {
 		// Common indicators of private videos:
 		// - 403 Forbidden responses
 		// - 404 Not Found (sometimes used for private content)
@@ -1394,9 +1395,9 @@ export default class TikTokerPlugin extends Plugin {
 						const universalData = JSON.parse(universalDataMatch[1]);
 						if (universalData.default?.ItemModule) {
 							const itemModule = universalData.default.ItemModule;
-							for (const [key, item] of Object.entries(itemModule)) {
+							for (const [_key, item] of Object.entries(itemModule)) {
 								if (typeof item === 'object' && item && 'id' in item && 'author' in item) {
-									const videoData = item as any;
+									const videoData = item as { id: string; author: { uniqueId: string } };
 									const constructedUrl = `https://www.tiktok.com/@${videoData.author.uniqueId}/video/${videoData.id}`;
 									this.debugLog(`Mobile: Found video in universal data: ${constructedUrl}`);
 									return constructedUrl;
@@ -1713,7 +1714,7 @@ export default class TikTokerPlugin extends Plugin {
 		// Replace | < > : " / \ ? * with safer alternatives or remove them
 		return fileName
 			.replace(/\|/g, '-')  // Pipe to dash
-			.replace(/[<>:"\/\\?*]/g, '')  // Remove Windows reserved characters
+			.replace(/[<>:"/\\?*]/g, '')  // Remove Windows reserved characters
 			.trim();
 	}
 
@@ -2048,7 +2049,7 @@ export default class TikTokerPlugin extends Plugin {
 			const modal = new BulkResultsModal(this.app, this, successful, failed, duplicates, oembedFailed, slideshows, skippedPrivate, (failedUrls: string[]) => {
 				// Add a delay before retrying
 				window.setTimeout(() => {
-					this.processBulkTikToks(failedUrls);
+					void this.processBulkTikToks(failedUrls);
 				}, 2000); // 2 second delay
 			});
 			modal.open();
@@ -2125,7 +2126,7 @@ export default class TikTokerPlugin extends Plugin {
 
 	showTranscriptionSetupNotice() {
 		const notice = new Notice('TikToker: Local transcription available! Click to set up.', 0);
-		const noticeEl = (notice as any).noticeEl;
+		const noticeEl = notice.noticeEl;
 
 		if (noticeEl) {
 			noticeEl.addClass('tiktoker-notice-clickable');
@@ -2528,7 +2529,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		const basicSection = this.createCollapsibleSection(container, 'Basic Settings');
 
 		new Setting(basicSection)
-			.setName('Output Folder')
+			.setName('Output folder')
 			.setDesc('Folder where TikTok notes will be saved')
 			.addText(text => text
 				.setPlaceholder('TikToks')
@@ -2539,7 +2540,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(basicSection)
-			.setName('File Naming Pattern')
+			.setName('File naming pattern')
 			.setDesc('Pattern for generating file names')
 			.addText(text => text
 				.setPlaceholder('{{author}}-{{date}}-{{title}}')
@@ -2550,7 +2551,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(basicSection)
-			.setName('Note Title Template')
+			.setName('Note title template')
 			.setDesc('Template for generating note titles')
 			.addText(text => text
 				.setPlaceholder('TikTok on {{description}} from {{author}}')
@@ -2563,7 +2564,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		const contentSection = this.createCollapsibleSection(container, 'Content & Properties');
 
 		new Setting(contentSection)
-			.setName('Enable Properties')
+			.setName('Enable properties')
 			.setDesc('Include frontmatter properties in notes')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableProperties)
@@ -2575,7 +2576,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.enableProperties) {
 			new Setting(contentSection)
-				.setName('Include Author')
+				.setName('Include author')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.includeAuthor)
 					.onChange(async (value) => {
@@ -2584,7 +2585,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(contentSection)
-				.setName('Include Date Created')
+				.setName('Include date created')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.includeDateCreated)
 					.onChange(async (value) => {
@@ -2602,7 +2603,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(contentSection)
-				.setName('Include Expanded URL')
+				.setName('Include expanded URL')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.includeExpandedUrl)
 					.onChange(async (value) => {
@@ -2611,7 +2612,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(contentSection)
-				.setName('Include Tags from Hashtags')
+				.setName('Include tags from hashtags')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.includeTagsFromHashtags)
 					.onChange(async (value) => {
@@ -2621,7 +2622,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(contentSection)
-			.setName('Include Hashtags in Content')
+			.setName('Include hashtags in content')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.includeHashtagsInContent)
 				.onChange(async (value) => {
@@ -2630,7 +2631,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(contentSection)
-			.setName('Note Content Template')
+			.setName('Note content template')
 			.setDesc('Template for generating note content')
 			.addTextArea(text => text
 				.setPlaceholder('{{iframe}}\n\n## Description\n{{description}}')
@@ -2643,7 +2644,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		const bulkSection = this.createCollapsibleSection(container, 'Bulk Processing');
 
 		new Setting(bulkSection)
-			.setName('Enable Bulk Processing')
+			.setName('Enable bulk processing')
 			.setDesc('Allow processing multiple TikTok URLs at once')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableBulkProcessing)
@@ -2655,7 +2656,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.enableBulkProcessing) {
 			new Setting(bulkSection)
-				.setName('Bypass Modal for Single URL')
+				.setName('Bypass modal for single URL')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.bypassModalForSingle)
 					.onChange(async (value) => {
@@ -2664,7 +2665,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(bulkSection)
-				.setName('Show Progress During Bulk Processing')
+				.setName('Show progress during bulk processing')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.showBulkProcessingProgress)
 					.onChange(async (value) => {
@@ -2674,7 +2675,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		}
 
 		new Setting(bulkSection)
-			.setName('Open Note on Creation')
+			.setName('Open note on creation')
 			.setDesc('Automatically open notes after creation')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.openNoteOnCreation)
@@ -2686,7 +2687,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		const advancedSection = this.createCollapsibleSection(container, 'Advanced', false);
 
 		new Setting(advancedSection)
-			.setName('URL Timeout (seconds)')
+			.setName('URL timeout (seconds)')
 			.addSlider(slider => slider
 				.setLimits(5, 30, 1)
 				.setValue(this.plugin.settings.urlTimeout)
@@ -2697,7 +2698,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(advancedSection)
-			.setName('Debug Mode')
+			.setName('Debug mode')
 			.setDesc('Enable verbose debug logging')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.debugMode)
@@ -2755,7 +2756,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		const mainSection = this.createCollapsibleSection(container, 'Transcription Settings');
 
 		new Setting(mainSection)
-			.setName('Enable Transcription')
+			.setName('Enable transcription')
 			.setDesc('Master toggle for all transcription features')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableTranscription)
@@ -2778,7 +2779,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 			}
 
 			new Setting(mainSection)
-				.setName('Auto-transcribe on Creation')
+				.setName('Auto-transcribe on creation')
 				.setDesc('Automatically transcribe when creating notes from clipboard')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.enableTranscriptionOnCreation)
@@ -2788,7 +2789,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(mainSection)
-				.setName('Enable Manual Transcription Command')
+				.setName('Enable manual transcription command')
 				.setDesc('Show "Transcribe TikTok" command in command palette')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.enableManualTranscriptionCommand)
@@ -2798,7 +2799,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(mainSection)
-				.setName('Show Transcription in Bulk Processing')
+				.setName('Show transcription in bulk processing')
 				.setDesc('Display transcription checkbox in bulk processing modal')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.enableBulkTranscription)
@@ -2809,7 +2810,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 			if (this.plugin.settings.enableBulkTranscription) {
 				new Setting(mainSection)
-					.setName('Transcription Default for Bulk')
+					.setName('Transcription default for bulk')
 					.setDesc('Check transcription by default in bulk modal')
 					.addToggle(toggle => toggle
 						.setValue(this.plugin.settings.transcriptionDefaultForBulk)
@@ -2820,7 +2821,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 			}
 
 			new Setting(mainSection)
-				.setName('Add Transcription Property')
+				.setName('Add transcription property')
 				.setDesc('Add "transcribed: true" to frontmatter when transcription is added')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.addTranscriptionPropertyToFrontmatter)
@@ -2830,7 +2831,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(mainSection)
-				.setName('Show Completion Notification')
+				.setName('Show completion notification')
 				.setDesc('Show a toast notification when transcription completes (bottom-right corner)')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.showTranscriptionCompleteNotification)
@@ -2841,18 +2842,14 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 			const modelSection = this.createCollapsibleSection(container, 'Model Management');
 
-			const modelInfo = modelSection.createEl('div');
-			modelInfo.style.cssText = 'margin-bottom: 16px; padding: 12px; background-color: var(--background-secondary); border-radius: 4px; font-size: 0.9em;';
+			const modelInfo = modelSection.createEl('div', {cls: 'tiktoker-model-info-inline'});
 
-			const table = modelInfo.createEl('table');
-			table.style.cssText = 'width: 100%; border-collapse: collapse; font-family: var(--font-monospace);';
+			const table = modelInfo.createEl('table', {cls: 'tiktoker-table-inline'});
 
 			const thead = table.createEl('thead');
 			const headerRow = thead.createEl('tr');
 			['Model', 'Size', 'Speed', 'Quality', '1min Video'].forEach(header => {
-				const th = headerRow.createEl('th');
-				th.textContent = header;
-				th.style.cssText = 'text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--background-modifier-border);';
+				headerRow.createEl('th', {text: header, cls: 'tiktoker-th-inline'});
 			});
 
 			const tbody = table.createEl('tbody');
@@ -2867,22 +2864,15 @@ class TikTokerSettingTab extends PluginSettingTab {
 			models.forEach(model => {
 				const row = tbody.createEl('tr');
 				model.forEach((cell, i) => {
-					const td = row.createEl('td');
-					td.textContent = cell;
-					td.style.cssText = 'padding: 4px 8px;';
-					if (i === 0 && model[0] === 'base') {
-						td.style.fontWeight = '600';
-						td.style.color = 'var(--interactive-accent)';
-					}
+					const cls = (i === 0 && model[0] === 'base') ? 'tiktoker-td-inline tiktoker-td-highlight' : 'tiktoker-td-inline';
+					row.createEl('td', {text: cell, cls});
 				});
 			});
 
-			const recommendation = modelInfo.createEl('div');
-			recommendation.style.cssText = 'margin-top: 8px; font-style: italic;';
-			recommendation.textContent = 'Recommendation: Use "base" model for best balance';
+			modelInfo.createEl('div', {text: 'Recommendation: Use "base" model for best balance', cls: 'tiktoker-recommendation-inline'});
 
 			new Setting(modelSection)
-				.setName('Whisper Model')
+				.setName('Whisper model')
 				.setDesc('Select transcription model (restart required)')
 				.addDropdown(dropdown => dropdown
 					.addOption('tiny', 'tiny (75MB)')
@@ -2897,7 +2887,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(modelSection)
-				.setName('Browser for Cookies')
+				.setName('Browser for cookies')
 				.setDesc('Which browser to use for cookie extraction')
 				.addDropdown(dropdown => dropdown
 					.addOption('chrome', 'Chrome')
@@ -2911,7 +2901,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 			const testSection = this.createCollapsibleSection(container, 'Setup & Testing');
 
 			new Setting(testSection)
-				.setName('Test Transcription Setup')
+				.setName('Test transcription setup')
 				.setDesc('Check if all dependencies are installed')
 				.addButton(button => button
 					.setButtonText('Run Test')
@@ -2921,7 +2911,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(testSection)
-				.setName('Whisper Script Path')
+				.setName('Whisper script path')
 				.setDesc('Path to transcription script (auto-detected if empty)')
 				.addText(text => text
 					.setPlaceholder('Auto-detect')
@@ -2934,15 +2924,14 @@ class TikTokerSettingTab extends PluginSettingTab {
 	}
 
 	renderStorageTab(container: HTMLElement): void {
-		const infoBox = container.createEl('div');
-		infoBox.style.cssText = 'margin-bottom: 24px; padding: 12px; background-color: var(--background-secondary); border-radius: 4px;';
+		const infoBox = container.createEl('div', {cls: 'tiktoker-storage-info-box'});
 		infoBox.createEl('strong', { text: 'Storage management:' });
 		infoBox.appendText(' By default, temporary files are automatically cleaned up. Transcriptions are saved directly in notes.');
 
 		const cleanupSection = this.createCollapsibleSection(container, 'Storage & Cleanup');
 
 		new Setting(cleanupSection)
-			.setName('Auto-cleanup After Transcription')
+			.setName('Auto-cleanup after transcription')
 			.setDesc('Automatically delete temporary audio files (Recommended)')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.autoCleanupAfterTranscription)
@@ -2952,7 +2941,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(cleanupSection)
-			.setName('Keep Audio Files')
+			.setName('Keep audio files')
 			.setDesc('Save audio files after transcription')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.keepAudioFiles)
@@ -2962,7 +2951,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(cleanupSection)
-			.setName('Keep Transcript Text Files')
+			.setName('Keep transcript text files')
 			.setDesc('Save transcript as separate .txt files')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.keepTranscriptFiles)
@@ -2974,7 +2963,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		const cacheSection = this.createCollapsibleSection(container, 'Cache Management');
 
 		new Setting(cacheSection)
-			.setName('Enable Global Cache')
+			.setName('Enable global cache')
 			.setDesc('Cache downloaded videos for faster re-processing')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableGlobalCache)
@@ -2986,7 +2975,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.enableGlobalCache) {
 			new Setting(cacheSection)
-				.setName('Cache Size Limit (MB)')
+				.setName('Cache size limit (MB)')
 				.setDesc('Maximum cache size before automatic cleanup')
 				.addSlider(slider => slider
 					.setLimits(50, 1000, 50)
@@ -2998,7 +2987,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(cacheSection)
-				.setName('Auto-clear Cache After (days)')
+				.setName('Auto-clear cache after (days)')
 				.setDesc('Automatically delete cached files older than this')
 				.addSlider(slider => slider
 					.setLimits(1, 30, 1)
@@ -3015,7 +3004,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		const reviewSection = this.createCollapsibleSection(container, 'Review Queue Settings');
 
 		new Setting(reviewSection)
-			.setName('Show Progress Bar')
+			.setName('Show progress bar')
 			.setDesc('Display progress bar in review queue')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.reviewQueueShowProgressBar)
@@ -3025,7 +3014,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(reviewSection)
-			.setName('Enable Transitions')
+			.setName('Enable transitions')
 			.setDesc('Add animations when changing items')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.reviewQueueEnableTransitions)
@@ -3035,7 +3024,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(reviewSection)
-			.setName('Default Sort Mode')
+			.setName('Default sort mode')
 			.setDesc('How to sort items by default')
 			.addDropdown(dropdown => dropdown
 				.addOption('created-desc', 'Newest First')
@@ -3049,7 +3038,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(reviewSection)
-			.setName('Priority Mode')
+			.setName('Priority mode')
 			.setDesc('Always show starred items first')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.reviewQueuePriorityMode)
@@ -3062,7 +3051,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		const sessionSection = this.createCollapsibleSection(container, 'Session Management');
 
 		new Setting(sessionSection)
-			.setName('Enable Session Management')
+			.setName('Enable session management')
 			.setDesc('Track and manage review sessions')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.reviewQueueEnableSessionManagement)
@@ -3074,7 +3063,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.reviewQueueEnableSessionManagement) {
 			new Setting(sessionSection)
-				.setName('Session Cleanup Days')
+				.setName('Session cleanup days')
 				.setDesc('Delete session data older than this')
 				.addSlider(slider => slider
 					.setLimits(1, 90, 1)
@@ -3090,7 +3079,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		const dataviewSection = this.createCollapsibleSection(container, 'Dataview Integration');
 
 		new Setting(dataviewSection)
-			.setName('Enable Dataview Insertion')
+			.setName('Enable Dataview insertion')
 			.setDesc('Insert Dataview queries into created notes')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.reviewQueueEnableDataview)
@@ -3102,7 +3091,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.reviewQueueEnableDataview) {
 			new Setting(dataviewSection)
-				.setName('Dataview Template')
+				.setName('Dataview template')
 				.setDesc('Template for Dataview query insertion')
 				.addText(text => text
 					.setPlaceholder('LIST')
@@ -3117,7 +3106,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		const viewSection = this.createCollapsibleSection(container, 'View Settings');
 
 		new Setting(viewSection)
-			.setName('Auto-pin to Sidebar')
+			.setName('Auto-pin to sidebar')
 			.setDesc('Automatically pin review queue to sidebar')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.reviewQueueAutoPinSidebar)
@@ -3127,7 +3116,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(viewSection)
-			.setName('Button Layout')
+			.setName('Button layout')
 			.setDesc('Choose how action buttons are positioned')
 			.addDropdown(dropdown => dropdown
 				.addOption('sticky-footer', 'Sticky Footer (Recommended)')
@@ -3799,87 +3788,29 @@ class SingleTranscriptionToast {
 
 	show() {
 		// Create toast element
-		this.toastElement = document.body.createDiv({cls: 'transcription-toast'});
-		this.toastElement.style.cssText = `
-			position: fixed;
-			top: 20px;
-			right: 20px;
-			width: 280px;
-			background: var(--background-primary);
-			border: 1px solid var(--background-modifier-border);
-			border-radius: 8px;
-			box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-			z-index: 1000;
-			transition: all 0.3s ease;
-		`;
+		this.toastElement = document.body.createDiv({cls: 'tiktoker-toast'});
 
 		// Header
-		const header = this.toastElement.createDiv({cls: 'toast-header'});
-		header.style.cssText = `
-			display: flex;
-			justify-content: space-between;
-			align-items: center;
-			padding: 12px 16px;
-			cursor: pointer;
-			border-bottom: 1px solid var(--background-modifier-border);
-		`;
+		const header = this.toastElement.createDiv({cls: 'tiktoker-toast-header'});
 
 		const titleSection = header.createDiv();
-		titleSection.createEl('div', {text: 'Transcribing', cls: 'toast-title'}).style.cssText = `
-			font-weight: 600;
-			font-size: 0.9em;
-		`;
-		titleSection.createEl('div', {text: this.fileName, cls: 'toast-filename'}).style.cssText = `
-			font-size: 0.8em;
-			color: var(--text-muted);
-			margin-top: 2px;
-		`;
+		titleSection.createEl('div', {text: 'Transcribing', cls: 'tiktoker-toast-title'});
+		titleSection.createEl('div', {text: this.fileName, cls: 'tiktoker-toast-filename'});
 
-		const collapseBtn = header.createEl('button', {text: '−'});
-		collapseBtn.style.cssText = `
-			background: none;
-			border: none;
-			font-size: 16px;
-			cursor: pointer;
-			color: var(--text-muted);
-		`;
+		const collapseBtn = header.createEl('button', {text: '−', cls: 'tiktoker-toast-collapse-btn'});
 
 		// Content
-		const content = this.toastElement.createDiv({cls: 'toast-content'});
-		content.style.cssText = `
-			padding: 12px 16px;
-		`;
+		const content = this.toastElement.createDiv({cls: 'tiktoker-toast-content'});
 
-		this.statusText = content.createEl('span', {text: 'Processing audio...'});
-		this.statusText.style.cssText = `
-			font-size: 0.85em;
-			color: var(--text-normal);
-		`;
+		this.statusText = content.createEl('span', {text: 'Processing audio...', cls: 'tiktoker-toast-status'});
 
-		this.timeText = content.createEl('span', {text: ' (0s)'});
-		this.timeText.style.cssText = `
-			font-size: 0.8em;
-			color: var(--text-muted);
-		`;
+		this.timeText = content.createEl('span', {text: ' (0s)', cls: 'tiktoker-toast-time'});
 
 		// Progress bar
-		const progressContainer = content.createDiv();
-		progressContainer.style.cssText = `
-			width: 100%;
-			height: 3px;
-			background-color: var(--background-modifier-border);
-			border-radius: 2px;
-			margin-top: 8px;
-			overflow: hidden;
-		`;
+		const progressContainer = content.createDiv({cls: 'tiktoker-toast-progress-container'});
 
-		this.progressBar = progressContainer.createDiv();
-		this.progressBar.style.cssText = `
-			height: 100%;
-			background-color: var(--interactive-accent);
-			width: 20%;
-			transition: width 0.3s ease;
-		`;
+		this.progressBar = progressContainer.createDiv({cls: 'tiktoker-toast-progress-bar'});
+		this.progressBar.style.width = '20%';
 
 		// Collapse functionality
 		const toggleCollapse = () => {
@@ -4056,7 +3987,7 @@ class TikTokReviewView extends ItemView {
 		// Progress bar (if enabled)
 		if (this.plugin.settings.reviewQueueShowProgressBar) {
 			this.progressBarDiv = this.containerDiv.createDiv({ cls: 'tiktoker-review-progress-bar' });
-			const progressFill = this.progressBarDiv.createDiv({ cls: 'tiktoker-review-progress-fill' });
+			this.progressBarDiv.createDiv({ cls: 'tiktoker-review-progress-fill' });
 		}
 
 		// Session Management UI
@@ -4120,7 +4051,7 @@ class TikTokReviewView extends ItemView {
 		// Combined Filter checkboxes and Sort controls
 		const filterDiv = this.containerDiv.createDiv({ cls: 'tiktoker-review-filter' });
 
-		const filterLabel = filterDiv.createEl('span', { text: 'Show: ', cls: 'tiktoker-review-filter-label' });
+		filterDiv.createEl('span', { text: 'Show: ', cls: 'tiktoker-review-filter-label' });
 
 		const filtersContainer = filterDiv.createDiv({ cls: 'tiktoker-review-filter-checkboxes' });
 
@@ -4149,7 +4080,7 @@ class TikTokReviewView extends ItemView {
 		});
 
 		// Sort dropdown with new options
-		const sortLabel = filterDiv.createEl('span', { text: 'Sort: ', cls: 'tiktoker-review-sort-label' });
+		filterDiv.createEl('span', { text: 'Sort: ', cls: 'tiktoker-review-sort-label' });
 		const sortToggle = filterDiv.createEl('select', { cls: 'tiktoker-dropdown' });
 		sortToggle.createEl('option', { text: 'Newest first', value: 'created-desc' });
 		sortToggle.createEl('option', { text: 'Oldest first', value: 'created-asc' });
@@ -4158,7 +4089,7 @@ class TikTokReviewView extends ItemView {
 		sortToggle.value = this.plugin.settings.reviewQueueDefaultSort;
 		this.sortMode = this.plugin.settings.reviewQueueDefaultSort;
 		sortToggle.addEventListener('change', async () => {
-			this.sortMode = sortToggle.value as any;
+			this.sortMode = sortToggle.value as TikTokerSettings['reviewQueueDefaultSort'];
 			await this.loadQueue();
 			await this.renderCurrentTikTok();
 		});
@@ -4230,11 +4161,11 @@ class TikTokReviewView extends ItemView {
 		const controlsWrapper = this.containerDiv.createDiv({ cls: 'tiktoker-review-controls-wrapper' });
 
 		// Navigation controls section
-		const navLabel = controlsWrapper.createEl('div', { text: 'Navigation:', cls: 'tiktoker-review-section-label' });
+		controlsWrapper.createEl('div', { text: 'Navigation:', cls: 'tiktoker-review-section-label' });
 		this.navControlsDiv = controlsWrapper.createDiv({ cls: 'tiktoker-review-nav-controls' });
 
 		// Status controls section
-		const statusLabel = controlsWrapper.createEl('div', { text: 'Status:', cls: 'tiktoker-review-section-label' });
+		controlsWrapper.createEl('div', { text: 'Status:', cls: 'tiktoker-review-section-label' });
 		this.statusControlsDiv = controlsWrapper.createDiv({ cls: 'tiktoker-review-status-controls' });
 
 		// Undo button
@@ -4556,7 +4487,8 @@ class TikTokReviewView extends ItemView {
 					});
 					hashtagEl.addEventListener('click', () => {
 						// Open tag search in left sidebar
-						(this.app as any).internalPlugins.plugins['global-search'].instance.openGlobalSearch(`tag:#${cleanTag}`);
+						// @ts-expect-error - internalPlugins is internal Obsidian API
+						this.app.internalPlugins.plugins['global-search'].instance.openGlobalSearch(`tag:#${cleanTag}`);
 					});
 				});
 			}
@@ -4644,7 +4576,7 @@ class TikTokReviewView extends ItemView {
 		} else {
 			// Show rendered markdown
 			const contentDiv = this.noteContentDiv.createEl('div', { cls: 'tiktoker-review-editable-content' });
-			await MarkdownRenderer.renderMarkdown(contentToRender, contentDiv, currentFile.path, this);
+			await MarkdownRenderer.render(this.app, contentToRender, contentDiv, currentFile.path, this);
 		}
 	}
 
@@ -4660,14 +4592,14 @@ class TikTokReviewView extends ItemView {
 		if (this.queue.length === 0) return;
 		this.currentIndex = (this.currentIndex - 1 + this.queue.length) % this.queue.length;
 		this.clearUndoState(); // Clear when moving to different file
-		this.renderCurrentTikTok();
+		void this.renderCurrentTikTok();
 	}
 
 	navigateNext() {
 		if (this.queue.length === 0) return;
 		this.currentIndex = (this.currentIndex + 1) % this.queue.length;
 		this.clearUndoState(); // Clear when moving to different file
-		this.renderCurrentTikTok();
+		void this.renderCurrentTikTok();
 	}
 
 	async toggleWatched() {
@@ -4937,7 +4869,7 @@ class TikTokReviewView extends ItemView {
 		this.sessionDropdown.empty();
 
 		// Add "No Session" option
-		const noSessionOpt = this.sessionDropdown.createEl('option', {
+		this.sessionDropdown.createEl('option', {
 			text: 'No session (temporary filter)',
 			value: ''
 		});
@@ -4945,7 +4877,7 @@ class TikTokReviewView extends ItemView {
 		// Add existing sessions
 		for (const session of this.plugin.settings.reviewSessions) {
 			const reviewedCount = session.reviewedFiles.length;
-			const opt = this.sessionDropdown.createEl('option', {
+			this.sessionDropdown.createEl('option', {
 				text: `${session.name} (${reviewedCount} reviewed)`,
 				value: session.id
 			});
@@ -5202,8 +5134,7 @@ ${whereClause}
 			const modal = new Modal(this.app);
 			modal.contentEl.createEl('p', { text: message });
 
-			const buttonDiv = modal.contentEl.createDiv({ cls: 'tiktoker-modal-button-container' });
-			buttonDiv.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;';
+			const buttonDiv = modal.contentEl.createDiv({ cls: 'tiktoker-button-container-end' });
 
 			const cancelBtn = buttonDiv.createEl('button', { text: 'Cancel' });
 			cancelBtn.addEventListener('click', () => {
@@ -5244,18 +5175,16 @@ class SessionNameModal extends Modal {
 
 		contentEl.createEl('h2', {text: this.initialName ? 'Rename Session' : 'New Session Name'});
 
-		const inputContainer = contentEl.createDiv({cls: 'session-name-input-container'});
-		inputContainer.style.cssText = 'margin: 20px 0;';
+		const inputContainer = contentEl.createDiv({cls: 'tiktoker-session-input-container'});
 
-		const label = inputContainer.createEl('label', {text: 'Session name:'});
-		label.style.cssText = 'display: block; margin-bottom: 8px; font-weight: 500;';
+		inputContainer.createEl('label', {text: 'Session name:', cls: 'tiktoker-session-label'});
 
 		this.nameInput = inputContainer.createEl('input', {
 			type: 'text',
 			placeholder: 'Enter session name...',
-			value: this.initialName
+			value: this.initialName,
+			cls: 'tiktoker-session-input'
 		});
-		this.nameInput.style.cssText = 'width: 100%; padding: 8px; border: 1px solid var(--background-modifier-border); border-radius: 4px; background-color: var(--background-primary);';
 
 		// Focus and select all text on open
 		window.setTimeout(() => {
@@ -5271,8 +5200,7 @@ class SessionNameModal extends Modal {
 			}
 		});
 
-		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
-		buttonContainer.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end; gap: 8px;';
+		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-button-container-end'});
 
 		const cancelButton = buttonContainer.createEl('button', {text: 'Cancel'});
 		cancelButton.onclick = () => this.close();
@@ -5323,37 +5251,23 @@ class SessionManagementModal extends Modal {
 		const sessions = this.plugin.settings.reviewSessions || [];
 
 		if (sessions.length === 0) {
-			const emptyMessage = contentEl.createDiv({cls: 'session-empty-message'});
-			emptyMessage.style.cssText = 'padding: 20px; text-align: center; color: var(--text-muted);';
-			emptyMessage.textContent = 'No review sessions found.';
+			contentEl.createDiv({cls: 'tiktoker-empty-message', text: 'No review sessions found.'});
 
-			const closeButton = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
-			closeButton.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end;';
+			const closeButton = contentEl.createDiv({cls: 'tiktoker-button-container-end'});
 			closeButton.createEl('button', {text: 'Close'}).onclick = () => this.close();
 			return;
 		}
 
-		const sessionsContainer = contentEl.createDiv({cls: 'sessions-container'});
-		sessionsContainer.style.cssText = 'max-height: 400px; overflow-y: auto; margin: 20px 0;';
+		const sessionsContainer = contentEl.createDiv({cls: 'tiktoker-session-container'});
 
 		sessions.forEach((session: ReviewSession) => {
-			const sessionItem = sessionsContainer.createDiv({cls: 'session-item'});
-			sessionItem.style.cssText = `
-				padding: 12px;
-				margin-bottom: 8px;
-				background-color: var(--background-secondary);
-				border-radius: 4px;
-				border: 1px solid var(--background-modifier-border);
-			`;
+			const sessionItem = sessionsContainer.createDiv({cls: 'tiktoker-session-item'});
 
-			const sessionHeader = sessionItem.createDiv({cls: 'session-header'});
-			sessionHeader.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;';
+			const sessionHeader = sessionItem.createDiv({cls: 'tiktoker-session-header'});
 
-			const sessionName = sessionHeader.createEl('strong', {text: session.name});
-			sessionName.style.cssText = 'font-size: 1.1em;';
+			sessionHeader.createEl('strong', {text: session.name, cls: 'tiktoker-session-name'});
 
-			const sessionActions = sessionHeader.createDiv({cls: 'session-actions'});
-			sessionActions.style.cssText = 'display: flex; gap: 8px;';
+			const sessionActions = sessionHeader.createDiv({cls: 'tiktoker-session-actions'});
 
 			// Rename button
 			const renameButton = sessionActions.createEl('button', {text: 'Rename', cls: 'mod-small'});
@@ -5368,8 +5282,7 @@ class SessionManagementModal extends Modal {
 			deleteButton.onclick = () => this.handleDelete(session);
 
 			// Session details
-			const sessionDetails = sessionItem.createDiv({cls: 'session-details'});
-			sessionDetails.style.cssText = 'font-size: 0.9em; color: var(--text-muted);';
+			const sessionDetails = sessionItem.createDiv({cls: 'tiktoker-session-details'});
 
 			const reviewedCount = session.reviewedFiles?.length || 0;
 			sessionDetails.createDiv({text: `Reviewed files: ${reviewedCount}`});
@@ -5387,8 +5300,7 @@ class SessionManagementModal extends Modal {
 			sessionDetails.createDiv({text: `Created: ${created} | Last accessed: ${lastAccessed}`});
 		});
 
-		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
-		buttonContainer.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end;';
+		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-button-container-end'});
 
 		const closeButton = buttonContainer.createEl('button', {text: 'Close'});
 		closeButton.onclick = () => this.close();
@@ -5422,8 +5334,7 @@ class SessionManagementModal extends Modal {
 		confirmModal.contentEl.createEl('p', {text: `Are you sure you want to reset the session "${session.name}"?`});
 		confirmModal.contentEl.createEl('p', {text: 'This will clear all reviewed files and filters, but keep the session.'});
 
-		const buttonContainer = confirmModal.contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
-		buttonContainer.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end; gap: 8px;';
+		const buttonContainer = confirmModal.contentEl.createDiv({cls: 'tiktoker-button-container-end'});
 
 		const cancelButton = buttonContainer.createEl('button', {text: 'Cancel'});
 		cancelButton.onclick = () => confirmModal.close();
@@ -5463,11 +5374,10 @@ class SessionManagementModal extends Modal {
 		confirmModal.contentEl.createEl('p', {text: `Are you sure you want to delete the session "${session.name}"?`});
 		confirmModal.contentEl.createEl('p', {
 			text: 'This action cannot be undone.',
-			cls: 'mod-warning'
-		}).style.cssText = 'color: var(--text-error); font-weight: 500;';
+			cls: 'tiktoker-error-text'
+		});
 
-		const buttonContainer = confirmModal.contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
-		buttonContainer.style.cssText = 'margin-top: 20px; display: flex; justify-content: flex-end; gap: 8px;';
+		const buttonContainer = confirmModal.contentEl.createDiv({cls: 'tiktoker-button-container-end'});
 
 		const cancelButton = buttonContainer.createEl('button', {text: 'Cancel'});
 		cancelButton.onclick = () => confirmModal.close();

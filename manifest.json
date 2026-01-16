@@ -1,7 +1,7 @@
 {
 	"id": "tiktoker",
 	"name": "TikToker",
-	"version": "1.5.4",
+	"version": "1.5.5",
 	"minAppVersion": "0.15.0",
 	"description": "Save TikTok videos as markdown notes with embedded content and metadata extraction.",
 	"author": "ameyxd",

@@ -1199,3 +1199,385 @@ If your plugin does not need CSS, delete this file.
 .tiktoker-collapsible-arrow {
 	font-size: 0.8em;
 }
+
+/* Modal positioning classes */
+.tiktoker-modal-fixed-top-right {
+	position: fixed !important;
+	top: 20px !important;
+	right: 20px !important;
+	left: auto !important;
+	bottom: auto !important;
+	width: 320px;
+	max-width: 320px;
+	z-index: 1000;
+	transform: none !important;
+	cursor: default;
+}
+
+.tiktoker-modal-fixed-bottom-right {
+	position: fixed !important;
+	bottom: 20px !important;
+	right: 20px !important;
+	top: auto !important;
+	left: auto !important;
+	width: 250px;
+	max-width: 250px;
+	z-index: 1000;
+	transform: none !important;
+	cursor: pointer;
+}
+
+.tiktoker-modal-header-flex {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 16px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.tiktoker-modal-subtitle {
+	font-size: 0.85em;
+	color: var(--text-muted);
+}
+
+.tiktoker-modal-title-margin {
+	margin: 0 0 4px 0;
+}
+
+.tiktoker-minimize-btn {
+	background: none;
+	border: none;
+	font-size: 18px;
+	cursor: pointer;
+	color: var(--text-muted);
+	padding: 4px 8px;
+}
+
+.tiktoker-content-padded {
+	padding: 16px;
+}
+
+.tiktoker-status-line-flex {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 12px;
+}
+
+.tiktoker-status-text {
+	font-size: 0.9em;
+}
+
+.tiktoker-time-text {
+	font-size: 0.8em;
+	color: var(--text-muted);
+}
+
+.tiktoker-progress-inline {
+	width: 100%;
+	height: 6px;
+	background-color: var(--background-modifier-border);
+	border-radius: 3px;
+	overflow: hidden;
+}
+
+.tiktoker-progress-inline-bar {
+	height: 100%;
+	background-color: var(--interactive-accent);
+	width: 15%;
+	transition: width 0.3s ease;
+}
+
+.tiktoker-section-h4-margin {
+	margin: 0 0 8px 0;
+}
+
+/* Installation modal classes */
+.tiktoker-install-info-box {
+	margin: 20px 0;
+	padding: 12px;
+	background-color: var(--background-secondary);
+	border-radius: 4px;
+}
+
+.tiktoker-button-row-flex {
+	display: flex;
+	gap: 10px;
+	margin-top: 20px;
+}
+
+.tiktoker-button-flex-1 {
+	flex: 1;
+}
+
+.tiktoker-progress-wrapper {
+	width: 100%;
+	height: 24px;
+	background-color: var(--background-modifier-border);
+	border-radius: 12px;
+	overflow: hidden;
+	position: relative;
+}
+
+.tiktoker-status-row {
+	display: flex;
+	justify-content: space-between;
+	margin-top: 8px;
+	font-size: 0.9em;
+}
+
+.tiktoker-success-center {
+	text-align: center;
+	padding: 20px;
+}
+
+.tiktoker-icon-large {
+	font-size: 48px;
+	color: var(--text-success);
+	margin-bottom: 16px;
+}
+
+.tiktoker-error-icon-large {
+	font-size: 48px;
+	color: var(--text-error);
+	margin-bottom: 16px;
+	text-align: center;
+}
+
+.tiktoker-path-mono {
+	margin: 8px 0 16px 20px;
+	padding: 8px;
+	background-color: var(--background-secondary);
+	border-radius: 4px;
+	font-family: monospace;
+	font-size: 0.9em;
+}
+
+.tiktoker-instructions-line-height {
+	margin: 16px 0;
+	line-height: 1.6;
+}
+
+.tiktoker-link-div {
+	margin: 8px 0 16px 20px;
+}
+
+.tiktoker-copy-btn-margin {
+	margin: 0 0 16px 20px;
+}
+
+.tiktoker-error-padding {
+	padding: 20px;
+}
+
+.tiktoker-error-msg {
+	color: var(--text-error);
+	margin: 12px 0;
+}
+
+.tiktoker-progress-margin {
+	margin: 20px 0;
+}
+
+/* Storage info box */
+.tiktoker-storage-info-box {
+	margin-bottom: 24px;
+	padding: 12px;
+	background-color: var(--background-secondary);
+	border-radius: 4px;
+}
+
+/* Model info table classes */
+.tiktoker-model-info-inline {
+	margin-bottom: 16px;
+	padding: 12px;
+	background-color: var(--background-secondary);
+	border-radius: 4px;
+	font-size: 0.9em;
+}
+
+.tiktoker-table-inline {
+	width: 100%;
+	border-collapse: collapse;
+	font-family: var(--font-monospace);
+}
+
+.tiktoker-th-inline {
+	text-align: left;
+	padding: 4px 8px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.tiktoker-td-inline {
+	padding: 4px 8px;
+}
+
+.tiktoker-td-highlight {
+	font-weight: 600;
+	color: var(--interactive-accent);
+}
+
+.tiktoker-recommendation-inline {
+	margin-top: 8px;
+	font-style: italic;
+}
+
+.tiktoker-text-center {
+	text-align: center;
+}
+
+.tiktoker-font-bold {
+	font-weight: bold;
+}
+
+.tiktoker-progress-bar {
+	height: 100%;
+	background-color: var(--interactive-accent);
+	width: 0%;
+	transition: width 0.3s ease;
+}
+
+/* Toast notification classes */
+.tiktoker-toast {
+	position: fixed;
+	bottom: 20px;
+	right: 20px;
+	width: 280px;
+	background-color: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+	z-index: 1000;
+	overflow: hidden;
+	transition: width 0.3s ease, opacity 0.3s ease;
+}
+
+.tiktoker-toast-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 12px;
+	background-color: var(--background-secondary);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.tiktoker-toast-title {
+	font-weight: 600;
+	font-size: 0.95em;
+	color: var(--text-normal);
+}
+
+.tiktoker-toast-filename {
+	font-size: 0.8em;
+	color: var(--text-muted);
+	margin-top: 2px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 180px;
+}
+
+.tiktoker-toast-collapse-btn {
+	background: none;
+	border: none;
+	font-size: 16px;
+	cursor: pointer;
+	color: var(--text-muted);
+	padding: 4px 8px;
+}
+
+.tiktoker-toast-content {
+	padding: 12px;
+}
+
+.tiktoker-toast-status {
+	font-size: 0.9em;
+	margin-bottom: 8px;
+}
+
+.tiktoker-toast-time {
+	font-size: 0.8em;
+	color: var(--text-muted);
+	margin-top: 4px;
+}
+
+.tiktoker-toast-progress-container {
+	width: 100%;
+	height: 4px;
+	background-color: var(--background-modifier-border);
+	border-radius: 2px;
+	overflow: hidden;
+	margin-top: 8px;
+}
+
+.tiktoker-toast-progress-bar {
+	height: 100%;
+	background-color: var(--interactive-accent);
+	width: 0%;
+	transition: width 0.3s ease;
+}
+
+/* Session management modal classes */
+.tiktoker-session-input-container {
+	margin: 20px 0;
+}
+
+.tiktoker-session-label {
+	display: block;
+	margin-bottom: 8px;
+	font-weight: 500;
+}
+
+.tiktoker-session-input {
+	width: 100%;
+	padding: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background-color: var(--background-primary);
+}
+
+.tiktoker-session-container {
+	max-height: 400px;
+	overflow-y: auto;
+	margin: 20px 0;
+}
+
+.tiktoker-session-item {
+	padding: 12px;
+	margin-bottom: 8px;
+	background-color: var(--background-secondary);
+	border-radius: 4px;
+	border: 1px solid var(--background-modifier-border);
+}
+
+.tiktoker-session-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 8px;
+}
+
+.tiktoker-session-name {
+	font-size: 1.1em;
+}
+
+.tiktoker-session-actions {
+	display: flex;
+	gap: 8px;
+}
+
+.tiktoker-session-details {
+	font-size: 0.9em;
+	color: var(--text-muted);
+}
+
+.tiktoker-empty-message {
+	padding: 20px;
+	text-align: center;
+	color: var(--text-muted);
+}
+
+.tiktoker-error-text {
+	color: var(--text-error);
+	font-weight: 500;
+}

@@ -549,86 +549,34 @@ export class SingleTranscriptionModal extends Modal {
 		const {contentEl} = this;
 		contentEl.empty();
 
-		this.modalEl.style.cssText = `
-			position: fixed !important;
-			top: 20px !important;
-			right: 20px !important;
-			left: auto !important;
-			width: 320px;
-			max-width: 320px;
-			z-index: 1000;
-			transform: none !important;
-		`;
+		this.modalEl.addClass('tiktoker-modal-fixed-top-right');
 
-		const header = contentEl.createDiv({cls: 'transcription-modal-header'});
-		header.style.cssText = `
-			display: flex;
-			justify-content: space-between;
-			align-items: center;
-			padding: 16px;
-			border-bottom: 1px solid var(--background-modifier-border);
-		`;
+		const header = contentEl.createDiv({cls: 'tiktoker-modal-header-flex'});
 
 		const titleSection = header.createDiv();
-		titleSection.createEl('h3', {text: 'TikTok Processing', cls: 'modal-title'}).style.margin = '0 0 4px 0';
-		titleSection.createEl('div', {text: `by ${this.data.author}`, cls: 'modal-subtitle'}).style.cssText = `
-			font-size: 0.85em;
-			color: var(--text-muted);
-		`;
+		titleSection.createEl('h3', {text: 'TikTok Processing', cls: 'modal-title tiktoker-modal-title-margin'});
+		titleSection.createEl('div', {text: `by ${this.data.author}`, cls: 'tiktoker-modal-subtitle'});
 
-		const minimizeBtn = header.createEl('button', {text: '−', cls: 'minimize-btn'});
-		minimizeBtn.style.cssText = `
-			background: none;
-			border: none;
-			font-size: 18px;
-			cursor: pointer;
-			color: var(--text-muted);
-			padding: 4px 8px;
-		`;
+		const minimizeBtn = header.createEl('button', {text: '−', cls: 'tiktoker-minimize-btn'});
 
-		const content = contentEl.createDiv({cls: 'transcription-modal-content'});
-		content.style.cssText = `padding: 16px;`;
+		const content = contentEl.createDiv({cls: 'tiktoker-content-padded'});
 
 		// Save references for backdrop click handler
 		this.content = content;
 		this.minimizeBtn = minimizeBtn;
 
 		const transcriptionSection = content.createDiv({cls: 'tiktoker-transcription-section'});
-		transcriptionSection.createEl('h4', {text: 'Transcription'}).style.margin = '0 0 8px 0';
+		transcriptionSection.createEl('h4', {text: 'Transcription', cls: 'tiktoker-section-h4-margin'});
 
-		const statusLine = transcriptionSection.createDiv();
-		statusLine.style.cssText = `
-			display: flex;
-			justify-content: space-between;
-			align-items: center;
-			margin-bottom: 12px;
-		`;
+		const statusLine = transcriptionSection.createDiv({cls: 'tiktoker-status-line-flex'});
 
-		this.statusText = statusLine.createEl('span', {text: 'Processing audio...'});
-		this.statusText.style.cssText = `font-size: 0.9em;`;
+		this.statusText = statusLine.createEl('span', {text: 'Processing audio...', cls: 'tiktoker-status-text'});
 
-		this.timeText = statusLine.createEl('span', {text: '0.0s'});
-		this.timeText.style.cssText = `
-			font-size: 0.8em;
-			color: var(--text-muted);
-		`;
+		this.timeText = statusLine.createEl('span', {text: '0.0s', cls: 'tiktoker-time-text'});
 
-		const progressContainer = transcriptionSection.createDiv();
-		progressContainer.style.cssText = `
-			width: 100%;
-			height: 6px;
-			background-color: var(--background-modifier-border);
-			border-radius: 3px;
-			overflow: hidden;
-		`;
+		const progressContainer = transcriptionSection.createDiv({cls: 'tiktoker-progress-inline'});
 
-		this.progressBar = progressContainer.createDiv();
-		this.progressBar.style.cssText = `
-			height: 100%;
-			background-color: var(--interactive-accent);
-			width: 15%;
-			transition: width 0.3s ease;
-		`;
+		this.progressBar = progressContainer.createDiv({cls: 'tiktoker-progress-inline-bar'});
 
 		minimizeBtn.onclick = () => {
 			this.toggleMinimize(content, minimizeBtn);
@@ -653,20 +601,10 @@ export class SingleTranscriptionModal extends Modal {
 		this.isMinimized = !this.isMinimized;
 
 		if (this.isMinimized) {
-			content.style.display = 'none';
+			content.addClass('tiktoker-hidden');
 			button.textContent = '+';
-			this.modalEl.style.cssText = `
-				position: fixed !important;
-				bottom: 20px !important;
-				right: 20px !important;
-				top: auto !important;
-				left: auto !important;
-				width: 250px;
-				max-width: 250px;
-				z-index: 1000;
-				transform: none !important;
-				cursor: pointer;
-			`;
+			this.modalEl.removeClass('tiktoker-modal-fixed-top-right');
+			this.modalEl.addClass('tiktoker-modal-fixed-bottom-right');
 
 			// Make entire modal clickable when minimized
 			this.modalEl.onclick = () => {
@@ -675,20 +613,10 @@ export class SingleTranscriptionModal extends Modal {
 				}
 			};
 		} else {
-			content.style.display = 'block';
+			content.removeClass('tiktoker-hidden');
 			button.textContent = '−';
-			this.modalEl.style.cssText = `
-				position: fixed !important;
-				top: 20px !important;
-				right: 20px !important;
-				left: auto !important;
-				bottom: auto !important;
-				width: 320px;
-				max-width: 320px;
-				z-index: 1000;
-				transform: none !important;
-				cursor: default;
-			`;
+			this.modalEl.removeClass('tiktoker-modal-fixed-bottom-right');
+			this.modalEl.addClass('tiktoker-modal-fixed-top-right');
 
 			// Remove click handler when expanded
 			this.modalEl.onclick = null;
