@@ -275,26 +275,30 @@ export class TranscriptionService {
 				return;
 			}
 
-			let content = await this.app.vault.read(file);
 			const transcriptionSection = `## Transcription\n\n${transcription.trim()}`;
 
-			// Check if placeholder exists
-			if (content.includes('{{transcription}}')) {
-				// Replace placeholder
-				content = content.replace(/{{transcription}}/g, transcriptionSection);
-				this.debugLog('Replaced transcription placeholder');
-			} else {
-				// Append at the end
-				content = content + '\n\n' + transcriptionSection;
-				this.debugLog('Appended transcription at end of file');
-			}
+			// Update file content using atomic process operation
+			await this.app.vault.process(file, (content) => {
+				// Check if placeholder exists
+				if (content.includes('{{transcription}}')) {
+					// Replace placeholder
+					this.debugLog('Replaced transcription placeholder');
+					return content.replace(/{{transcription}}/g, transcriptionSection);
+				} else {
+					// Append at the end
+					this.debugLog('Appended transcription at end of file');
+					return content + '\n\n' + transcriptionSection;
+				}
+			});
 
-			// Add transcribed property to frontmatter if enabled
+			// Add transcribed property to frontmatter if enabled (using proper API)
 			if (this.settings.addTranscriptionPropertyToFrontmatter) {
-				content = this.addTranscribedProperty(content);
+				await this.app.fileManager.processFrontMatter(file, (fm) => {
+					if (!fm.transcribed) {
+						fm.transcribed = true;
+					}
+				});
 			}
-
-			await this.app.vault.modify(file, content);
 
 			this.debugLog(`Transcription updated for ${filePath}`);
 
@@ -306,24 +310,6 @@ export class TranscriptionService {
 		} catch (error) {
 			console.error('TikToker: Failed to update file with transcription:', error);
 		}
-	}
-
-	private addTranscribedProperty(content: string): string {
-		// Check if file has frontmatter
-		if (content.startsWith('---\n')) {
-			const frontmatterEnd = content.indexOf('\n---\n', 4);
-			if (frontmatterEnd !== -1) {
-				const frontmatter = content.substring(4, frontmatterEnd);
-				const body = content.substring(frontmatterEnd + 5);
-
-				// Check if transcribed property already exists
-				if (!frontmatter.includes('transcribed:')) {
-					const newFrontmatter = frontmatter + '\ntranscribed: true';
-					return `---\n${newFrontmatter}\n---\n${body}`;
-				}
-			}
-		}
-		return content;
 	}
 
 	async getTranscription(url: string, videoId: string | null, isBulkProcessing: boolean = false): Promise<string> {

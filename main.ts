@@ -1,7 +1,7 @@
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer, Menu, MenuItem, stringifyYaml, FileSystemAdapter, PluginManifest } from 'obsidian';
-import { TranscriptionService, TranscriptionSettings } from './transcription';
-import { ScriptInstaller } from './scriptInstaller';
-import { ScriptInstallationModal } from './scriptInstallationModal';
+import { TranscriptionService, TranscriptionSettings } from './src/transcription';
+import { ScriptInstaller } from './src/scriptInstaller';
+import { ScriptInstallationModal } from './src/scriptInstallationModal';
 
 const VIEW_TYPE_TIKTOK_REVIEW = 'tiktok-review-view';
 
@@ -2265,7 +2265,17 @@ class TestResultModal extends Modal {
 	}
 }
 
-// DependencyCheckModal - smart dependency checker with installation instructions
+/**
+ * Modal for checking and displaying installation instructions for transcription dependencies.
+ *
+ * The transcription feature requires the following external packages to be installed:
+ * - Python 3.8+ (for running whisper scripts)
+ * - yt-dlp (for downloading TikTok audio)
+ * - ffmpeg (for audio processing)
+ * - faster-whisper (Python package, installed automatically by setup script)
+ *
+ * These packages are optional - only required if using the local transcription feature.
+ */
 class DependencyCheckModal extends Modal {
 	dependencies: {python3: boolean, ytdlp: boolean, ffmpeg: boolean, venv: boolean, whisper: boolean};
 	platform: string;
@@ -4518,8 +4528,13 @@ class TikTokReviewView extends ItemView {
 		const currentFile = this.queue[this.currentIndex];
 		const content = await this.app.vault.cachedRead(currentFile);
 
-		// Extract Description and Transcription sections
-		let displayContent = content.replace(/^---[\s\S]*?---\n/, '');
+		// Extract Description and Transcription sections using MetadataCache for frontmatter position
+		const cache = this.app.metadataCache.getFileCache(currentFile);
+		let displayContent = content;
+		if (cache?.frontmatterPosition) {
+			const lines = content.split('\n');
+			displayContent = lines.slice(cache.frontmatterPosition.end.line + 1).join('\n');
+		}
 		displayContent = displayContent.replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/, '');
 		displayContent = displayContent.replace(/<blockquote[^>]*class="tiktok-embed"[\s\S]*?<\/script>/, '');
 
@@ -4570,7 +4585,7 @@ class TikTokReviewView extends ItemView {
 					}
 				}
 
-				await this.app.vault.modify(currentFile, updatedContent);
+				await this.app.vault.process(currentFile, () => updatedContent);
 				new Notice('Content saved');
 			});
 		} else {
@@ -4684,7 +4699,7 @@ class TikTokReviewView extends ItemView {
 			content += `\n\n## Notes\n- ${noteText}`;
 		}
 
-		await this.app.vault.modify(currentFile, content);
+		await this.app.vault.process(currentFile, () => content);
 		this.quickNotesTextarea.value = '';
 		new Notice('Note added');
 	}
@@ -4764,7 +4779,8 @@ class TikTokReviewView extends ItemView {
 
 		try {
 			// Restore the original content
-			await this.app.vault.modify(this.undoState.file, this.undoState.content);
+			const contentToRestore = this.undoState.content;
+			await this.app.vault.process(this.undoState.file, () => contentToRestore);
 			new Notice('Undone');
 
 			// Reload queue and re-render
@@ -5109,14 +5125,8 @@ ${whereClause}
 		const contentToInsert = `\n\n${heading}\n\n${dataviewQuery}\n`;
 
 		try {
-			// Read current content
-			let content = await this.app.vault.read(activeFile);
-
-			// Append to end
-			content += contentToInsert;
-
-			// Write back
-			await this.app.vault.modify(activeFile, content);
+			// Append to end using atomic process operation
+			await this.app.vault.process(activeFile, (data) => data + contentToInsert);
 
 			new Notice(`Dataview query added to ${activeFile.basename}`);
 		} catch (error) {
