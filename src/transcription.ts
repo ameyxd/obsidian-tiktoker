@@ -544,6 +544,11 @@ export class SingleTranscriptionModal extends Modal {
 		titleSection.createEl('div', {text: `by ${this.data.author}`, cls: 'tiktoker-modal-subtitle'});
 
 		const minimizeBtn = header.createEl('button', {text: '−', cls: 'tiktoker-minimize-btn'});
+		const closeBtn = header.createEl('button', {text: '\u00D7', cls: 'tiktoker-close-btn'});
+		closeBtn.onclick = (e) => {
+			e.stopPropagation();
+			this.handleCloseRequest();
+		};
 
 		const content = contentEl.createDiv({cls: 'tiktoker-content-padded'});
 
@@ -564,11 +569,40 @@ export class SingleTranscriptionModal extends Modal {
 
 		this.progressBar = progressContainer.createDiv({cls: 'tiktoker-progress-inline-bar'});
 
-		minimizeBtn.onclick = () => {
+		minimizeBtn.onclick = (e) => {
+			e.stopPropagation(); // Prevent event from bubbling to modalEl
 			this.toggleMinimize(content, minimizeBtn);
 		};
 
 		this.startProgressTracking();
+	}
+
+	private handleCloseRequest() {
+		if (this.shouldAllowClose) {
+			super.close();
+		} else {
+			this.showCloseConfirmation();
+		}
+	}
+
+	private showCloseConfirmation() {
+		const confirmModal = new Modal(this.app);
+		confirmModal.contentEl.createEl('h3', {text: 'Close transcription modal?'});
+		confirmModal.contentEl.createEl('p', {text: 'Transcription will continue in the background.'});
+
+		const buttonContainer = confirmModal.contentEl.createDiv({cls: 'tiktoker-button-container-end'});
+
+		const cancelBtn = buttonContainer.createEl('button', {text: 'Keep open'});
+		cancelBtn.onclick = () => confirmModal.close();
+
+		const closeBtn = buttonContainer.createEl('button', {text: 'Close modal', cls: 'mod-cta'});
+		closeBtn.onclick = () => {
+			confirmModal.close();
+			this.shouldAllowClose = true;
+			super.close();
+		};
+
+		confirmModal.open();
 	}
 
 	close() {
@@ -592,6 +626,9 @@ export class SingleTranscriptionModal extends Modal {
 			this.modalEl.removeClass('tiktoker-modal-fixed-top-right');
 			this.modalEl.addClass('tiktoker-modal-fixed-bottom-right');
 
+			// Add class to container to hide backdrop and allow click-through
+			this.containerEl.addClass('tiktoker-modal-minimized');
+
 			// Make entire modal clickable when minimized
 			this.modalEl.onclick = () => {
 				if (this.isMinimized) {
@@ -603,6 +640,9 @@ export class SingleTranscriptionModal extends Modal {
 			button.textContent = '−';
 			this.modalEl.removeClass('tiktoker-modal-fixed-bottom-right');
 			this.modalEl.addClass('tiktoker-modal-fixed-top-right');
+
+			// Remove minimized class to restore backdrop
+			this.containerEl.removeClass('tiktoker-modal-minimized');
 
 			// Remove click handler when expanded
 			this.modalEl.onclick = null;
@@ -616,10 +656,11 @@ export class SingleTranscriptionModal extends Modal {
 				this.timeText.textContent = `${elapsed.toFixed(1)}s`;
 			}
 
-			if (this.progressBar && this.progressBar.style.width !== '100%') {
-				const currentWidth = parseFloat(this.progressBar.style.width) || 0;
+			if (this.progressBar && !this.progressBar.hasClass('tiktoker-progress-complete')) {
+				const currentWidth = parseFloat(this.progressBar.getCssPropertyValue('--tiktoker-progress') || '0') || 0;
 				if (currentWidth < 85) {
-					this.progressBar.style.width = `${Math.min(85, currentWidth + Math.random() * 8)}%`;
+					this.progressBar.setCssProps({'--tiktoker-progress': `${Math.min(85, currentWidth + Math.random() * 8)}%`});
+					this.progressBar.addClass('tiktoker-progress-dynamic');
 				}
 			}
 		}, 1000);
@@ -636,8 +677,8 @@ export class SingleTranscriptionModal extends Modal {
 
 		if (this.progressBar) {
 			if (status === 'Completed') {
-				this.progressBar.style.width = '100%';
-				this.statusText.style.color = 'var(--text-success)';
+				this.progressBar.addClass('tiktoker-progress-complete');
+				this.statusText.addClass('tiktoker-text-success');
 
 				window.setTimeout(() => {
 					if (this.service && this.service.activeTranscriptionModal === this) {
@@ -646,8 +687,8 @@ export class SingleTranscriptionModal extends Modal {
 					}
 				}, 5000);
 			} else if (status === 'Failed') {
-				this.progressBar.style.backgroundColor = 'var(--text-error)';
-				this.statusText.style.color = 'var(--text-error)';
+				this.progressBar.addClass('tiktoker-progress-error');
+				this.statusText.addClass('tiktoker-text-error');
 
 				window.setTimeout(() => {
 					if (this.service && this.service.activeTranscriptionModal === this) {

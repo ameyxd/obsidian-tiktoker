@@ -65,7 +65,7 @@ export class ScriptInstaller {
 
 			// Step 5: Verify installation
 			progressCallback?.({ percent: 90, status: 'Verifying installation...' });
-			const verified = await this.verifyScripts();
+			const verified = this.verifyScripts();
 
 			if (!verified) {
 				return { success: false, error: 'Installation verification failed. Required scripts not found.' };
@@ -140,7 +140,7 @@ export class ScriptInstaller {
 		const zip = await JSZip.loadAsync(buffer);
 
 		// Extract all files
-		const entries = Object.entries(zip.files) as [string, JSZip.JSZipObject][];
+		const entries = Object.entries(zip.files);
 		for (const [filename, file] of entries) {
 			if (file.dir) {
 				// Create directory
@@ -150,7 +150,7 @@ export class ScriptInstaller {
 				}
 			} else {
 				// Extract file
-				const content = await file.async('nodebuffer') as Buffer;
+				const content = await file.async('nodebuffer');
 				const filePath = path.join(targetPath, filename);
 
 				// Ensure directory exists

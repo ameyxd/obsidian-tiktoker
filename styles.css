@@ -281,6 +281,7 @@ If your plugin does not need CSS, delete this file.
 }
 .tiktoker-review-progress-fill {
 	height: 100%;
+	width: var(--tiktoker-progress, 0%);
 	background: var(--interactive-accent);
 	transition: width 0.3s ease;
 }
@@ -1214,6 +1215,25 @@ If your plugin does not need CSS, delete this file.
 	cursor: default;
 }
 
+/* Hide Obsidian's default close button on transcription modal - we use our own */
+.tiktoker-modal-fixed-top-right .modal-close-button,
+.tiktoker-modal-fixed-bottom-right .modal-close-button {
+	display: none;
+}
+
+/* When modal is minimized, hide backdrop and allow click-through to underlying content */
+.tiktoker-modal-minimized {
+	pointer-events: none;
+}
+
+.tiktoker-modal-minimized .modal-bg {
+	display: none;
+}
+
+.tiktoker-modal-minimized .modal {
+	pointer-events: auto;
+}
+
 .tiktoker-modal-fixed-bottom-right {
 	position: fixed !important;
 	bottom: 20px !important;
@@ -1251,6 +1271,20 @@ If your plugin does not need CSS, delete this file.
 	cursor: pointer;
 	color: var(--text-muted);
 	padding: 4px 8px;
+}
+
+.tiktoker-close-btn {
+	background: none;
+	border: none;
+	font-size: 18px;
+	cursor: pointer;
+	color: var(--text-muted);
+	padding: 4px 8px;
+	margin-left: 4px;
+}
+
+.tiktoker-close-btn:hover {
+	color: var(--text-error);
 }
 
 .tiktoker-content-padded {
@@ -1580,4 +1614,15 @@ If your plugin does not need CSS, delete this file.
 .tiktoker-error-text {
 	color: var(--text-error);
 	font-weight: 500;
+}
+
+/* Dynamic progress bar using CSS custom property */
+.tiktoker-progress-dynamic {
+	width: var(--tiktoker-progress, 0%);
+	transition: width 0.3s ease;
+}
+
+/* Copy button success state */
+.tiktoker-copy-success {
+	background-color: var(--interactive-success) !important;
 }

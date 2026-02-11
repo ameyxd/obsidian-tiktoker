@@ -55,10 +55,10 @@ export class ScriptInstallationModal extends Modal {
 
 		// Auto-install button
 		const autoInstallBtn = this.buttonContainer.createEl('button', {
-			text: 'One-Click Install',
+			text: 'One-click install',
 			cls: 'mod-cta tiktoker-button-flex-1'
 		});
-		autoInstallBtn.onclick = () => this.startAutoInstall();
+		autoInstallBtn.onclick = () => void this.startAutoInstall();
 
 		// Manual install button
 		const manualBtn = this.buttonContainer.createEl('button', {
@@ -109,7 +109,8 @@ export class ScriptInstallationModal extends Modal {
 
 	private updateProgress(progress: InstallProgress) {
 		if (this.progressBar) {
-			this.progressBar.style.width = `${progress.percent}%`;
+			this.progressBar.setCssProps({'--tiktoker-progress': `${progress.percent}%`});
+			this.progressBar.addClass('tiktoker-progress-dynamic');
 		}
 		if (this.statusText) {
 			this.statusText.textContent = progress.status;
@@ -223,7 +224,9 @@ export class ScriptInstallationModal extends Modal {
 			cls: 'mod-cta tiktoker-copy-btn-margin'
 		});
 		copyBtn.onclick = () => {
-			navigator.clipboard.writeText(this.installer.getPluginPath());
+			navigator.clipboard.writeText(this.installer.getPluginPath()).catch(() => {
+				new Notice('Failed to copy to clipboard');
+			});
 			new Notice('Plugin path copied to clipboard');
 		};
 
