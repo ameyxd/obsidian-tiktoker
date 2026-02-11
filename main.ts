@@ -1,4 +1,4 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer, Menu, MenuItem, stringifyYaml, FileSystemAdapter, PluginManifest } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer, Menu, MenuItem, stringifyYaml, FileSystemAdapter } from 'obsidian';
 import { TranscriptionService, TranscriptionSettings } from './src/transcription';
 import { ScriptInstaller } from './src/scriptInstaller';
 import { ScriptInstallationModal } from './src/scriptInstallationModal';
@@ -269,7 +269,7 @@ export default class TikTokerPlugin extends Plugin {
 
 			// Use existing path if set, otherwise try auto-detection
 			const scriptPath = this.settings.whisperScriptPath ||
-			                   path.join(absolutePluginDir, 'whisper-scripts', 'tiktok2text.sh');
+				path.join(absolutePluginDir, 'whisper-scripts', 'tiktok2text.sh');
 
 			// Verify the script file actually exists
 			if (fs.existsSync(scriptPath)) {
@@ -537,7 +537,7 @@ export default class TikTokerPlugin extends Plugin {
 		}
 	}
 
-	private async fetchTikTokData(url: string, isBulkProcessing: boolean = false) {
+	private async fetchTikTokData(url: string, isBulkProcessing = false) {
 		// Try desktop oEmbed approach first for both desktop and mobile
 		// Mobile will fall back to mobile-specific processing if oEmbed fails
 		
@@ -668,7 +668,7 @@ export default class TikTokerPlugin extends Plugin {
 		}
 	}
 
-	private async fetchTikTokDataMobile(url: string, isBulkProcessing: boolean = false) {
+	private async fetchTikTokDataMobile(url: string, isBulkProcessing = false) {
 		this.debugLog('Mobile processing for URL:', url);
 
 		// For /t/ URLs, try oEmbed directly on the original URL first (like desktop)
@@ -820,7 +820,7 @@ export default class TikTokerPlugin extends Plugin {
 				};
 			} else {
 				// For mobile short URLs with some expansion, try enhanced data extraction
-				const enhancedData = await this.extractDataFromShortUrl(url, expandedUrl);
+				const enhancedData = this.extractDataFromShortUrl(url, expandedUrl);
 				if (enhancedData.success && enhancedData.data) {
 					this.debugLog('Enhanced extraction successful');
 					return enhancedData.data;
@@ -1214,10 +1214,10 @@ export default class TikTokerPlugin extends Plugin {
 	
 	// Check if a URL is a valid TikTok video URL
 	private isValidTikTokVideoUrl(url: string): boolean {
-		return url.includes('tiktok.com') && 
-			   (url.includes('/video/') || url.includes('/photo/')) && 
-			   !url.includes('/t/') && 
-			   !url.includes('vm.tiktok.com');
+		return url.includes('tiktok.com') &&
+			(url.includes('/video/') || url.includes('/photo/')) &&
+			!url.includes('/t/') &&
+			!url.includes('vm.tiktok.com');
 	}
 
 	// Enhanced data extraction for short URLs when standard expansion fails
@@ -1227,7 +1227,7 @@ export default class TikTokerPlugin extends Plugin {
 		try {
 			// Create a reasonable description based on the URL pattern
 			let description = 'TikTok Video';
-			let author = 'Unknown';
+			const author = 'Unknown';
 			
 			// Try to identify the type of short URL and adjust accordingly
 			if (originalUrl.includes('/t/')) {
@@ -1571,7 +1571,7 @@ export default class TikTokerPlugin extends Plugin {
 		}
 	}
 
-	private async createTikTokNote(data: TikTokData, isBulkProcessing: boolean = false): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string}> {
+	private async createTikTokNote(data: TikTokData, isBulkProcessing = false): Promise<{success: boolean, duplicate?: boolean, fileName?: string, noteTitle?: string}> {
 		const fileName = this.generateFileName(data);
 		const noteTitle = this.generateNoteTitle(data);
 		const noteContent = this.generateNoteContent(data);
@@ -1790,9 +1790,9 @@ export default class TikTokerPlugin extends Plugin {
 		if (data.transcription && data.transcription.trim()) {
 			transcriptionContent = `## Transcription\n\n${data.transcription.trim()}`;
 		} else if (this.settings.enableTranscription &&
-				   this.settings.transcriptionApi !== 'none' &&
-				   !data.isSlideshow &&
-				   !data.isPrivate) {
+			this.settings.transcriptionApi !== 'none' &&
+			!data.isSlideshow &&
+			!data.isPrivate) {
 			// Leave placeholder for async transcription update
 			transcriptionContent = '{{transcription}}';
 		}
@@ -1804,7 +1804,7 @@ export default class TikTokerPlugin extends Plugin {
 			.replace(/{{transcription}}/g, transcriptionContent);
 	}
 
-	private async processBulkTikToks(urls: string[], enableTranscription: boolean = false) {
+	private async processBulkTikToks(urls: string[], enableTranscription = false) {
 		if (urls.length === 0) return;
 
 		const modal = new BulkProgressModal(this.app, urls.length);
@@ -1820,7 +1820,8 @@ export default class TikTokerPlugin extends Plugin {
 		const transcriptionTasks: Promise<void>[] = [];
 
 		while (processingQueue.length > 0) {
-			const url = processingQueue.shift()!;
+			const url = processingQueue.shift();
+			if (!url) continue;
 			modal.updateProgress(processed + 1, `Processing: ${url}`);
 
 			try {
@@ -2209,46 +2210,6 @@ export default class TikTokerPlugin extends Plugin {
 
 }
 
-// TestResultModal - shows transcription setup test results
-class TestResultModal extends Modal {
-	result: string;
-	hasErrors: boolean;
-
-	constructor(app: App, result: string, hasErrors: boolean) {
-		super(app);
-		this.result = result;
-		this.hasErrors = hasErrors;
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.empty();
-
-		contentEl.createEl('h2', {text: 'Transcription setup test'});
-
-		const resultContainer = contentEl.createDiv({cls: 'tiktoker-test-result'});
-
-		resultContainer.textContent = this.result;
-
-		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-button-container-end'});
-
-		if (this.hasErrors) {
-			const installButton = buttonContainer.createEl('button', {text: 'Install instructions', cls: 'mod-cta tiktoker-mr-8'});
-			installButton.onclick = () => {
-				window.open('https://brew.sh', '_blank');
-			};
-		}
-
-		const closeButton = buttonContainer.createEl('button', {text: 'Close'});
-		closeButton.onclick = () => this.close();
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
-
 /**
  * Modal for checking and displaying installation instructions for transcription dependencies.
  *
@@ -2490,7 +2451,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		}
 	}
 
-	createCollapsibleSection(container: HTMLElement, title: string, defaultOpen: boolean = true): HTMLElement {
+	createCollapsibleSection(container: HTMLElement, title: string, defaultOpen = true): HTMLElement {
 		const section = container.createDiv({cls: 'tiktoker-collapsible-section'});
 
 		const header = section.createDiv({cls: 'tiktoker-collapsible-header'});
@@ -2771,7 +2732,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 			// Force whisper-local if transcription is enabled
 			if (this.plugin.settings.transcriptionApi === 'none') {
 				this.plugin.settings.transcriptionApi = 'whisper-local';
-				this.plugin.saveSettings();
+				void this.plugin.saveSettings();
 			}
 
 			new Setting(mainSection)
@@ -2872,7 +2833,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 				.setDesc('Select transcription model (restart required)')
 				.addDropdown(dropdown => dropdown
 					.addOption('tiny', 'tiny (75MB)')
-					.addOption('base', 'base (142MB) - Recommended')
+					.addOption('base', 'base (142MB) - recommended')
 					.addOption('small', 'small (466MB)')
 					.addOption('medium', 'medium (1.5GB)')
 					.addOption('large', 'large (2.9GB)')
@@ -2928,7 +2889,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 		new Setting(cleanupSection)
 			.setName('Auto-cleanup after transcription')
-			.setDesc('Automatically delete temporary audio files (Recommended)')
+			.setDesc('Automatically delete temporary audio files (recommended)')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.autoCleanupAfterTranscription)
 				.onChange(async (value) => {
@@ -3188,7 +3149,7 @@ class BulkProcessingModal extends Modal {
 	transcriptionCheckbox: HTMLInputElement;
 	defaultTranscription: boolean;
 
-	constructor(app: App, urls: string[], onSubmit: (selectedUrls: string[], enableTranscription: boolean) => void, defaultTranscription: boolean = false) {
+	constructor(app: App, urls: string[], onSubmit: (selectedUrls: string[], enableTranscription: boolean) => void, defaultTranscription = false) {
 		super(app);
 		this.urls = urls;
 		this.onSubmit = onSubmit;
@@ -3268,7 +3229,7 @@ class BulkProcessingModal extends Modal {
 
 class BulkProgressModal extends Modal {
 	total: number;
-	current: number = 0;
+	current = 0;
 	progressBar: HTMLDivElement;
 	statusText: HTMLParagraphElement;
 	transcriptionStatusText: HTMLParagraphElement;
@@ -3276,7 +3237,7 @@ class BulkProgressModal extends Modal {
 	currentTranscriptionText: HTMLParagraphElement;
 	currentTranscriptionProgress: HTMLDivElement;
 	currentTranscriptionTimer: HTMLSpanElement;
-	isCompleted: boolean = false;
+	isCompleted = false;
 	minimalToast: HTMLDivElement | null = null;
 	transcriptionTasks: Map<string, {status: string, startTime: number, endTime?: number}> = new Map();
 	currentTranscription: {url: string, startTime: number, interval?: number} | null = null;
@@ -3533,7 +3494,7 @@ class BulkProgressModal extends Modal {
 		if (completedTasks.length === 0) return '0';
 		
 		const totalTime = completedTasks.reduce((sum, task) => {
-			return sum + (task.endTime! - task.startTime);
+			return sum + ((task.endTime ?? task.startTime) - task.startTime);
 		}, 0);
 		
 		return ((totalTime / completedTasks.length) / 1000).toFixed(1);
@@ -3601,8 +3562,8 @@ class BulkResultsModal extends Modal {
 				
 				const content = duplicateItem.createDiv({cls: 'tiktoker-content'});
 				
-				const titleDiv = content.createEl('div', {text: `${item.noteTitle || item.fileName}`, cls: 'tiktoker-title'});
-				const urlDiv = content.createEl('div', {text: item.url, cls: 'tiktoker-url'});
+				content.createEl('div', {text: `${item.noteTitle || item.fileName}`, cls: 'tiktoker-title'});
+				content.createEl('div', {text: item.url, cls: 'tiktoker-url'});
 				
 				const buttonContainer = duplicateItem.createDiv({cls: 'tiktoker-button-container'});
 				
@@ -3634,7 +3595,7 @@ class BulkResultsModal extends Modal {
 
 			this.slideshows.forEach(item => {
 				const slideshowItem = slideshowContainer.createDiv({cls: 'tiktoker-slideshow-item'});
-				const icon = slideshowItem.createSpan({text: '📸', cls: 'tiktoker-icon'});
+				slideshowItem.createSpan({text: '📸', cls: 'tiktoker-icon'});
 				const content = slideshowItem.createDiv();
 				content.createEl('div', {text: `${item.noteTitle || item.fileName}`});
 				content.createEl('div', {text: item.url, cls: 'tiktoker-url'});
@@ -3649,7 +3610,7 @@ class BulkResultsModal extends Modal {
 
 			this.skippedPrivate.forEach(item => {
 				const privateItem = privateContainer.createDiv({cls: 'tiktoker-private-item'});
-				const icon = privateItem.createSpan({text: '🔒', cls: 'tiktoker-icon'});
+				privateItem.createSpan({text: '🔒', cls: 'tiktoker-icon'});
 				const content = privateItem.createDiv();
 				content.createEl('a', {href: item.url, text: item.url, cls: 'tiktoker-url'});
 			});
@@ -3663,7 +3624,7 @@ class BulkResultsModal extends Modal {
 
 			this.oembedFailed.forEach(item => {
 				const fallbackItem = fallbackContainer.createDiv({cls: 'tiktoker-fallback-item'});
-				const icon = fallbackItem.createSpan({text: '🔄', cls: 'tiktoker-icon'});
+				fallbackItem.createSpan({text: '🔄', cls: 'tiktoker-icon'});
 				const content = fallbackItem.createDiv();
 				content.createEl('div', {text: `${item.noteTitle || item.fileName}`});
 				content.createEl('div', {text: item.url, cls: 'tiktoker-url'});
@@ -3768,155 +3729,24 @@ class BulkResultsModal extends Modal {
 	}
 }
 
-
-class SingleTranscriptionToast {
-	app: App;
-	fileName: string;
-	toastElement: HTMLDivElement;
-	statusText: HTMLSpanElement;
-	timeText: HTMLSpanElement;
-	progressBar: HTMLDivElement;
-	startTime: number;
-	isCollapsed: boolean = false;
-
-	constructor(app: App, fileName: string) {
-		this.app = app;
-		this.fileName = fileName;
-		this.startTime = Date.now();
-	}
-
-	show() {
-		// Create toast element
-		this.toastElement = document.body.createDiv({cls: 'tiktoker-toast'});
-
-		// Header
-		const header = this.toastElement.createDiv({cls: 'tiktoker-toast-header'});
-
-		const titleSection = header.createDiv();
-		titleSection.createEl('div', {text: 'Transcribing', cls: 'tiktoker-toast-title'});
-		titleSection.createEl('div', {text: this.fileName, cls: 'tiktoker-toast-filename'});
-
-		const collapseBtn = header.createEl('button', {text: '−', cls: 'tiktoker-toast-collapse-btn'});
-
-		// Content
-		const content = this.toastElement.createDiv({cls: 'tiktoker-toast-content'});
-
-		this.statusText = content.createEl('span', {text: 'Processing audio...', cls: 'tiktoker-toast-status'});
-
-		this.timeText = content.createEl('span', {text: ' (0s)', cls: 'tiktoker-toast-time'});
-
-		// Progress bar
-		const progressContainer = content.createDiv({cls: 'tiktoker-toast-progress-container'});
-
-		this.progressBar = progressContainer.createDiv({cls: 'tiktoker-toast-progress-bar tiktoker-progress-dynamic'});
-		this.progressBar.setCssProps({'--tiktoker-progress': '20%'});
-
-		// Collapse functionality
-		const toggleCollapse = () => {
-			this.isCollapsed = !this.isCollapsed;
-			if (this.isCollapsed) {
-				content.addClass('tiktoker-hidden');
-				collapseBtn.textContent = '+';
-				this.toastElement.removeClass('tiktoker-toast-expanded');
-				this.toastElement.addClass('tiktoker-toast-collapsed');
-			} else {
-				content.removeClass('tiktoker-hidden');
-				collapseBtn.textContent = '−';
-				this.toastElement.removeClass('tiktoker-toast-collapsed');
-				this.toastElement.addClass('tiktoker-toast-expanded');
-			}
-		};
-
-		header.onclick = toggleCollapse;
-		collapseBtn.onclick = (e) => {
-			e.stopPropagation();
-			toggleCollapse();
-		};
-
-		// Animate progress
-		this.animateProgress();
-	}
-
-	animateProgress() {
-		const interval = window.setInterval(() => {
-			const elapsed = (Date.now() - this.startTime) / 1000;
-			if (this.timeText) {
-				this.timeText.textContent = ` (${elapsed.toFixed(1)}s)`;
-			}
-			
-			// Animate progress bar until completion
-			if (this.progressBar && !this.progressBar.hasClass('tiktoker-progress-complete')) {
-				const currentWidth = parseFloat(this.progressBar.getCssPropertyValue('--tiktoker-progress') || '0') || 0;
-				if (currentWidth < 80) {
-					this.progressBar.setCssProps({'--tiktoker-progress': `${Math.min(80, currentWidth + Math.random() * 10)}%`});
-				}
-			}
-		}, 1000);
-
-		// Store interval for cleanup
-		(this.toastElement as HTMLElement & {_interval?: number})._interval = interval;
-	}
-
-	updateStatus(status: string, timeElapsed?: number) {
-		if (this.statusText) {
-			this.statusText.textContent = status;
-		}
-
-		if (timeElapsed && this.timeText) {
-			this.timeText.textContent = ` (${(timeElapsed / 1000).toFixed(1)}s)`;
-		}
-
-		if (this.progressBar) {
-			if (status === 'Completed') {
-				this.progressBar.addClass('tiktoker-progress-complete');
-				this.statusText.addClass('tiktoker-text-success');
-				this.autoHide(3000);
-			} else if (status === 'Failed') {
-				this.progressBar.addClass('tiktoker-progress-error');
-				this.statusText.addClass('tiktoker-text-error');
-				this.autoHide(5000);
-			}
-		}
-
-		// Clean up interval
-		const elementWithInterval = this.toastElement as HTMLElement & {_interval?: NodeJS.Timeout};
-		if (elementWithInterval._interval) {
-			window.clearInterval(elementWithInterval._interval);
-		}
-	}
-
-	autoHide(delay: number) {
-		window.setTimeout(() => {
-			if (this.toastElement) {
-				this.toastElement.addClass('tiktoker-opacity-0');
-				window.setTimeout(() => {
-					if (this.toastElement) {
-						this.toastElement.remove();
-					}
-				}, 300);
-			}
-		}, delay);
-	}
-}
-
 class TikTokReviewView extends ItemView {
 	plugin: TikTokerPlugin;
 	queue: TFile[] = [];
-	currentIndex: number = 0;
+	currentIndex = 0;
 	filterMode: 'unwatched' | 'review_again' | 'watched' = 'unwatched';
 	// Combined filters
-	filterStarred: boolean = false;
-	filterUnwatched: boolean = true;
-	filterWatched: boolean = false;
-	filterReviewAgain: boolean = false;
+	filterStarred = false;
+	filterUnwatched = true;
+	filterWatched = false;
+	filterReviewAgain = false;
 
 	sortMode: 'created-asc' | 'created-desc' | 'author' | 'hashtags' = 'created-desc';
-	showNoteContent: boolean = false;
-	editableContent: boolean = false;
+	showNoteContent = false;
+	editableContent = false;
 
 	// Session filters
-	hashtagFilter: string = '';
-	textFilter: string = '';
+	hashtagFilter = '';
+	textFilter = '';
 	activeSession: ReviewSession | null = null;
 
 	// Undo state
@@ -3957,7 +3787,7 @@ class TikTokReviewView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		return 'TikTok Review';
+		return 'TikTok review';
 	}
 
 	getIcon(): string {
@@ -3974,13 +3804,15 @@ class TikTokReviewView extends ItemView {
 		this.containerDiv = container.createDiv({ cls: 'tiktoker-review-content' });
 
 		// Apply layout class based on settings
-		const layoutClass = this.plugin.settings.reviewQueueButtonLayout === 'sticky-footer' ? 'tiktoker-review-layout-sticky' :
-		                    this.plugin.settings.reviewQueueButtonLayout === 'scroll-container' ? 'tiktoker-review-layout-scroll' :
-		                    'tiktoker-review-layout-floating';
+		const layoutClass = this.plugin.settings.reviewQueueButtonLayout === 'sticky-footer'
+			? 'tiktoker-review-layout-sticky'
+			: this.plugin.settings.reviewQueueButtonLayout === 'scroll-container'
+				? 'tiktoker-review-layout-scroll'
+				: 'tiktoker-review-layout-floating';
 		this.containerDiv.addClass(layoutClass);
 
 		// Header
-		const header = this.containerDiv.createEl('h4', {
+		this.containerDiv.createEl('h4', {
 			text: 'TikTok review queue',
 			cls: 'tiktoker-review-header'
 		});
@@ -4112,7 +3944,7 @@ class TikTokReviewView extends ItemView {
 		toggleButton.addEventListener('click', () => {
 			this.showNoteContent = !this.showNoteContent;
 			toggleButton.setText(this.showNoteContent ? '▲ Hide note content' : '▼ Show note content');
-			this.renderNoteContent();
+			void this.renderNoteContent();
 		});
 
 		const editToggleButton = noteButtonsDiv.createEl('button', {
@@ -4122,7 +3954,7 @@ class TikTokReviewView extends ItemView {
 		editToggleButton.addEventListener('click', () => {
 			this.editableContent = !this.editableContent;
 			editToggleButton.setText(this.editableContent ? 'View' : 'Edit');
-			this.renderNoteContent();
+			void this.renderNoteContent();
 		});
 
 		const openTabButton = noteButtonsDiv.createEl('button', {
@@ -4228,9 +4060,11 @@ class TikTokReviewView extends ItemView {
 		this.containerDiv.removeClass('tiktoker-review-layout-floating');
 
 		// Apply the new layout class based on current settings
-		const layoutClass = this.plugin.settings.reviewQueueButtonLayout === 'sticky-footer' ? 'tiktoker-review-layout-sticky' :
-		                    this.plugin.settings.reviewQueueButtonLayout === 'scroll-container' ? 'tiktoker-review-layout-scroll' :
-		                    'tiktoker-review-layout-floating';
+		const layoutClass = this.plugin.settings.reviewQueueButtonLayout === 'sticky-footer'
+			? 'tiktoker-review-layout-sticky'
+			: this.plugin.settings.reviewQueueButtonLayout === 'scroll-container'
+				? 'tiktoker-review-layout-scroll'
+				: 'tiktoker-review-layout-floating';
 		this.containerDiv.addClass(layoutClass);
 	}
 
@@ -4335,9 +4169,10 @@ class TikTokReviewView extends ItemView {
 
 			// Sort by reviewed status within filtered results (unreviewed first)
 			if (this.activeSession) {
+				const session = this.activeSession;
 				this.queue.sort((a, b) => {
-					const aReviewed = this.activeSession!.reviewedFiles.includes(a.path);
-					const bReviewed = this.activeSession!.reviewedFiles.includes(b.path);
+					const aReviewed = session.reviewedFiles.includes(a.path);
+					const bReviewed = session.reviewedFiles.includes(b.path);
 					if (aReviewed && !bReviewed) return 1;  // b comes first (unreviewed)
 					if (!aReviewed && bReviewed) return -1; // a comes first (unreviewed)
 					return 0;
@@ -4803,7 +4638,7 @@ class TikTokReviewView extends ItemView {
 				const textEscaped = this.textFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 				textPattern = new RegExp(textEscaped, 'i');
 			}
-		} catch (e) {
+		} catch (_e) {
 			// Invalid regex, return false
 			return false;
 		}
@@ -4886,8 +4721,8 @@ class TikTokReviewView extends ItemView {
 		}
 
 		// Add "New Session..." option
-		const newSessionOpt = this.sessionDropdown.createEl('option', {
-			text: '+ New Session...',
+		this.sessionDropdown.createEl('option', {
+			text: '+ New session...',
 			value: '__new__'
 		});
 
@@ -4908,10 +4743,6 @@ class TikTokReviewView extends ItemView {
 
 		if (this.activeSession) {
 			const reviewed = this.activeSession.reviewedFiles.length;
-			const total = this.queue.length;
-			const unreviewed = total - this.activeSession.reviewedFiles.filter(f =>
-				this.queue.some(qf => qf.path === f)
-			).length;
 
 			this.sessionInfoDiv.createEl('span', {
 				text: `Active: ${this.activeSession.name} | ${reviewed} reviewed`,
@@ -4928,7 +4759,7 @@ class TikTokReviewView extends ItemView {
 	async switchSession(sessionId: string) {
 		if (sessionId === '__new__') {
 			// Create new session
-			await this.createNewSession();
+			this.createNewSession();
 			return;
 		}
 
@@ -5233,7 +5064,6 @@ class SessionManagementModal extends Modal {
 	}
 
 	onOpen() {
-		const {contentEl} = this;
 		this.renderContent();
 	}
 

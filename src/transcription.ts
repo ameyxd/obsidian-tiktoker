@@ -217,7 +217,7 @@ export class TranscriptionService {
 		url: string,
 		videoId: string | null,
 		filePath: string,
-		isBulkProcessing: boolean = false,
+		isBulkProcessing = false,
 		progressCallback?: (status: string, timeElapsed?: number) => void
 	): Promise<void> {
 		const startTime = Date.now();
@@ -267,7 +267,7 @@ export class TranscriptionService {
 		});
 	}
 
-	async updateFileWithTranscription(filePath: string, transcription: string, isBulkProcessing: boolean = false): Promise<void> {
+	async updateFileWithTranscription(filePath: string, transcription: string, isBulkProcessing = false): Promise<void> {
 		try {
 			const file = this.app.vault.getAbstractFileByPath(filePath);
 			if (!file || !(file instanceof TFile)) {
@@ -312,7 +312,7 @@ export class TranscriptionService {
 		}
 	}
 
-	async getTranscription(url: string, videoId: string | null, isBulkProcessing: boolean = false): Promise<string> {
+	async getTranscription(url: string, videoId: string | null, isBulkProcessing = false): Promise<string> {
 		if (this.settings.transcriptionApi === 'none') {
 			return '';
 		}
@@ -324,7 +324,7 @@ export class TranscriptionService {
 		return '';
 	}
 
-	private async getWhisperLocalTranscription(url: string, videoId: string | null, isBulkProcessing: boolean = false): Promise<string> {
+	private async getWhisperLocalTranscription(url: string, videoId: string | null, isBulkProcessing = false): Promise<string> {
 		if (Platform.isMobile) {
 			if (!isBulkProcessing) {
 				new Notice('Local transcription is not available on mobile devices');
@@ -516,12 +516,12 @@ export class SingleTranscriptionModal extends Modal {
 	timeText: HTMLSpanElement;
 	progressBar: HTMLDivElement;
 	startTime: number;
-	isMinimized: boolean = false;
+	isMinimized = false;
 	interval: number;
 	service: TranscriptionService;
 	content: HTMLDivElement | null = null;
 	minimizeBtn: HTMLButtonElement | null = null;
-	shouldAllowClose: boolean = false;
+	shouldAllowClose = false;
 
 	constructor(app: App, fileName: string, data: TranscriptionModalData, service: TranscriptionService) {
 		super(app);

@@ -203,7 +203,7 @@ export class ScriptInstaller {
 		try {
 			const path = window.require('path') as typeof import('path');
 			return path.join(this.scriptsDir, 'tiktok2text.sh');
-		} catch (error) {
+		} catch (_error) {
 			return null;
 		}
 	}
