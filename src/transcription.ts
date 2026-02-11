@@ -540,7 +540,7 @@ export class SingleTranscriptionModal extends Modal {
 		const header = contentEl.createDiv({cls: 'tiktoker-modal-header-flex'});
 
 		const titleSection = header.createDiv();
-		titleSection.createEl('h3', {text: 'TikTok Processing', cls: 'modal-title tiktoker-modal-title-margin'});
+		titleSection.createEl('h3', {text: 'TikTok processing', cls: 'modal-title tiktoker-modal-title-margin'});
 		titleSection.createEl('div', {text: `by ${this.data.author}`, cls: 'tiktoker-modal-subtitle'});
 
 		const minimizeBtn = header.createEl('button', {text: '−', cls: 'tiktoker-minimize-btn'});
