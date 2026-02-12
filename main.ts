@@ -2358,7 +2358,7 @@ class DependencyCheckModal extends Modal {
 		const detailsSection = contentEl.createDiv({cls: 'tiktoker-details-section'});
 
 		const detailsToggle = detailsSection.createEl('div', {cls: 'tiktoker-details-toggle'});
-		detailsToggle.textContent = '▶ show detailed output';
+		detailsToggle.textContent = 'Show detailed output';
 
 		const detailsContent = detailsSection.createEl('pre', {cls: 'tiktoker-details-content'});
 		detailsContent.textContent = this.rawOutput;
@@ -2367,7 +2367,7 @@ class DependencyCheckModal extends Modal {
 		detailsToggle.onclick = () => {
 			expanded = !expanded;
 			detailsContent.toggleClass('expanded', expanded);
-			detailsToggle.textContent = expanded ? '▼ Hide detailed output' : '▶ Show detailed output';
+			detailsToggle.textContent = expanded ? 'Hide detailed output' : 'Show detailed output';
 		};
 
 		// Close button
@@ -3836,12 +3836,12 @@ class TikTokReviewView extends ItemView {
 			void this.switchSession(this.sessionDropdown.value);
 		});
 
-		const manageSessionBtn = sessionControlsDiv.createEl('button', { text: '⚙️', cls: 'tiktoker-review-manage-btn' });
+		const manageSessionBtn = sessionControlsDiv.createEl('button', { text: 'Manage', cls: 'tiktoker-review-manage-btn' });
 		manageSessionBtn.title = 'Manage sessions';
 		manageSessionBtn.addEventListener('click', () => this.openSessionManagementModal());
 
 		if (this.plugin.settings.reviewQueueEnableDataview) {
-			const dataviewBtn = sessionControlsDiv.createEl('button', { text: '📋', cls: 'tiktoker-review-manage-btn' });
+			const dataviewBtn = sessionControlsDiv.createEl('button', { text: 'Dataview', cls: 'tiktoker-review-manage-btn' });
 			dataviewBtn.title = 'Insert Dataview to current note';
 			dataviewBtn.addEventListener('click', () => void this.insertDataviewToCurrentNote());
 		}
@@ -3938,12 +3938,12 @@ class TikTokReviewView extends ItemView {
 		// Note content toggle, edit toggle, and open button container
 		const noteButtonsDiv = scrollableWrapper.createDiv({ cls: 'tiktoker-review-note-buttons' });
 		const toggleButton = noteButtonsDiv.createEl('button', {
-			text: '▼ show note content',
+			text: 'Show note content',
 			cls: 'mod-cta'
 		});
 		toggleButton.addEventListener('click', () => {
 			this.showNoteContent = !this.showNoteContent;
-			toggleButton.setText(this.showNoteContent ? '▲ hide note content' : '▼ show note content');
+			toggleButton.setText(this.showNoteContent ? 'Hide note content' : 'Show note content');
 			void this.renderNoteContent();
 		});
 
@@ -4007,27 +4007,27 @@ class TikTokReviewView extends ItemView {
 
 	createControls() {
 		// Navigation buttons (together)
-		const prevButton = this.navControlsDiv.createEl('button', { text: '⬅ prev' });
+		const prevButton = this.navControlsDiv.createEl('button', { text: 'Prev' });
 		prevButton.addEventListener('click', () => this.navigatePrev());
 
-		const nextButton = this.navControlsDiv.createEl('button', { text: 'next ➡' });
+		const nextButton = this.navControlsDiv.createEl('button', { text: 'Next' });
 		nextButton.addEventListener('click', () => this.navigateNext());
 
 		// Status buttons (toggleable)
-		this.watchedButton = this.statusControlsDiv.createEl('button', { text: '✓ watched' });
+		this.watchedButton = this.statusControlsDiv.createEl('button', { text: 'Watched' });
 		this.watchedButton.addEventListener('click', () => void this.toggleWatched());
 
-		this.starButton = this.statusControlsDiv.createEl('button', { text: '⭐ star' });
+		this.starButton = this.statusControlsDiv.createEl('button', { text: 'Star' });
 		this.starButton.addEventListener('click', () => void this.toggleStar());
 
-		const reviewAgainButton = this.statusControlsDiv.createEl('button', { text: '🔄 again' });
+		const reviewAgainButton = this.statusControlsDiv.createEl('button', { text: 'Again' });
 		reviewAgainButton.addEventListener('click', () => void this.markAsReviewAgain());
 
-		const skipButton = this.statusControlsDiv.createEl('button', { text: '⏭ skip' });
+		const skipButton = this.statusControlsDiv.createEl('button', { text: 'Skip' });
 		skipButton.addEventListener('click', () => void this.markAsSkip());
 
 		// Undo button (subtle, at bottom)
-		this.undoButton = this.undoButtonDiv.createEl('button', { text: '↶ undo' });
+		this.undoButton = this.undoButtonDiv.createEl('button', { text: 'Undo' });
 		this.undoButton.disabled = true;
 		this.undoButton.addEventListener('click', () => void this.undoLastAction());
 	}
@@ -4094,9 +4094,9 @@ class TikTokReviewView extends ItemView {
 		this.watchedButton.removeClass('is-active');
 		if (isWatched) {
 			this.watchedButton.addClass('is-active');
-			this.watchedButton.setText('✓ watched');
+			this.watchedButton.setText('Watched');
 		} else {
-			this.watchedButton.setText('watched');
+			this.watchedButton.setText('Watched');
 		}
 		if (transitionClass) this.watchedButton.addClass(transitionClass);
 
@@ -4104,9 +4104,9 @@ class TikTokReviewView extends ItemView {
 		this.starButton.removeClass('is-active');
 		if (isStarred) {
 			this.starButton.addClass('is-active');
-			this.starButton.setText('⭐ starred');
+			this.starButton.setText('Starred');
 		} else {
-			this.starButton.setText('⭐ star');
+			this.starButton.setText('Star');
 		}
 		if (transitionClass) this.starButton.addClass(transitionClass);
 
