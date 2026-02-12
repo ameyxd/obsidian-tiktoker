@@ -2108,7 +2108,7 @@ export default class TikTokerPlugin extends Plugin {
 	}
 
 	showTranscriptionSetupNotice() {
-		const notice = new Notice('TikToker: Local transcription available! Click to set up.', 0);
+		const notice = new Notice('TikToker: local transcription available! Click to set up.', 0);
 		const messageEl = (notice as Notice & { messageEl?: HTMLElement }).messageEl;
 
 		if (messageEl) {
@@ -2286,7 +2286,7 @@ class DependencyCheckModal extends Modal {
 
 		if (allOk) {
 			statusSection.createEl('div', {
-				text: '✓ All dependencies installed!',
+				text: '✓ all dependencies installed!',
 				cls: 'tiktoker-status-success'
 			});
 		} else {
@@ -2358,7 +2358,7 @@ class DependencyCheckModal extends Modal {
 		const detailsSection = contentEl.createDiv({cls: 'tiktoker-details-section'});
 
 		const detailsToggle = detailsSection.createEl('div', {cls: 'tiktoker-details-toggle'});
-		detailsToggle.textContent = '▶ Show detailed output';
+		detailsToggle.textContent = '▶ show detailed output';
 
 		const detailsContent = detailsSection.createEl('pre', {cls: 'tiktoker-details-content'});
 		detailsContent.textContent = this.rawOutput;
@@ -2826,7 +2826,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 				});
 			});
 
-			modelInfo.createEl('div', {text: 'Recommendation: Use "base" model for best balance', cls: 'tiktoker-recommendation-inline'});
+			modelInfo.createEl('div', {text: 'Recommendation: use "base" model for best balance', cls: 'tiktoker-recommendation-inline'});
 
 			new Setting(modelSection)
 				.setName('Whisper model')
@@ -3938,12 +3938,12 @@ class TikTokReviewView extends ItemView {
 		// Note content toggle, edit toggle, and open button container
 		const noteButtonsDiv = scrollableWrapper.createDiv({ cls: 'tiktoker-review-note-buttons' });
 		const toggleButton = noteButtonsDiv.createEl('button', {
-			text: '▼ Show note content',
+			text: '▼ show note content',
 			cls: 'mod-cta'
 		});
 		toggleButton.addEventListener('click', () => {
 			this.showNoteContent = !this.showNoteContent;
-			toggleButton.setText(this.showNoteContent ? '▲ Hide note content' : '▼ Show note content');
+			toggleButton.setText(this.showNoteContent ? '▲ hide note content' : '▼ show note content');
 			void this.renderNoteContent();
 		});
 
@@ -4007,27 +4007,27 @@ class TikTokReviewView extends ItemView {
 
 	createControls() {
 		// Navigation buttons (together)
-		const prevButton = this.navControlsDiv.createEl('button', { text: '⬅ Prev' });
+		const prevButton = this.navControlsDiv.createEl('button', { text: '⬅ prev' });
 		prevButton.addEventListener('click', () => this.navigatePrev());
 
-		const nextButton = this.navControlsDiv.createEl('button', { text: 'Next ➡' });
+		const nextButton = this.navControlsDiv.createEl('button', { text: 'next ➡' });
 		nextButton.addEventListener('click', () => this.navigateNext());
 
 		// Status buttons (toggleable)
-		this.watchedButton = this.statusControlsDiv.createEl('button', { text: '✓ Watched' });
+		this.watchedButton = this.statusControlsDiv.createEl('button', { text: '✓ watched' });
 		this.watchedButton.addEventListener('click', () => void this.toggleWatched());
 
-		this.starButton = this.statusControlsDiv.createEl('button', { text: '⭐ Star' });
+		this.starButton = this.statusControlsDiv.createEl('button', { text: '⭐ star' });
 		this.starButton.addEventListener('click', () => void this.toggleStar());
 
-		const reviewAgainButton = this.statusControlsDiv.createEl('button', { text: '🔄 Again' });
+		const reviewAgainButton = this.statusControlsDiv.createEl('button', { text: '🔄 again' });
 		reviewAgainButton.addEventListener('click', () => void this.markAsReviewAgain());
 
-		const skipButton = this.statusControlsDiv.createEl('button', { text: '⏭ Skip' });
+		const skipButton = this.statusControlsDiv.createEl('button', { text: '⏭ skip' });
 		skipButton.addEventListener('click', () => void this.markAsSkip());
 
 		// Undo button (subtle, at bottom)
-		this.undoButton = this.undoButtonDiv.createEl('button', { text: '↶ Undo' });
+		this.undoButton = this.undoButtonDiv.createEl('button', { text: '↶ undo' });
 		this.undoButton.disabled = true;
 		this.undoButton.addEventListener('click', () => void this.undoLastAction());
 	}
@@ -4094,9 +4094,9 @@ class TikTokReviewView extends ItemView {
 		this.watchedButton.removeClass('is-active');
 		if (isWatched) {
 			this.watchedButton.addClass('is-active');
-			this.watchedButton.setText('✓ Watched');
+			this.watchedButton.setText('✓ watched');
 		} else {
-			this.watchedButton.setText('Watched');
+			this.watchedButton.setText('watched');
 		}
 		if (transitionClass) this.watchedButton.addClass(transitionClass);
 
@@ -4104,9 +4104,9 @@ class TikTokReviewView extends ItemView {
 		this.starButton.removeClass('is-active');
 		if (isStarred) {
 			this.starButton.addClass('is-active');
-			this.starButton.setText('⭐ Starred');
+			this.starButton.setText('⭐ starred');
 		} else {
-			this.starButton.setText('⭐ Star');
+			this.starButton.setText('⭐ star');
 		}
 		if (transitionClass) this.starButton.addClass(transitionClass);
 
@@ -4638,7 +4638,7 @@ class TikTokReviewView extends ItemView {
 				const textEscaped = this.textFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 				textPattern = new RegExp(textEscaped, 'i');
 			}
-		} catch (_e) {
+		} catch {
 			// Invalid regex, return false
 			return false;
 		}
