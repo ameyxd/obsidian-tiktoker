@@ -183,8 +183,8 @@ interface TikTokerSettings {
 }
 
 const DEFAULT_SETTINGS: TikTokerSettings = {
-	outputFolder: 'TikToks',
-	fileNamingPattern: 'TikTok by {{author}} on {{description}}',
+	outputFolder: 'Tiktoks',
+	fileNamingPattern: 'Tiktok by {{author}} on {{description}}',
 	includeHashtagsInContent: true,
 	hashtagDisplayFormat: '#{{tag}}',
 	enableProperties: true,
@@ -321,13 +321,13 @@ export default class TikTokerPlugin extends Plugin {
 			(leaf) => new TikTokReviewView(leaf, this)
 		);
 
-		this.addRibbonIcon('video', 'Read TikTok from clipboard', () => {
+		this.addRibbonIcon('video', 'Read tiktok from clipboard', () => {
 			void this.processTikTokFromClipboard();
 		});
 
 		this.addCommand({
 			id: 'read-tiktok-clipboard',
-			name: 'Read TikTok from clipboard',
+			name: 'Read tiktok from clipboard',
 			callback: () => {
 				void this.processTikTokFromClipboard();
 			}
@@ -336,7 +336,7 @@ export default class TikTokerPlugin extends Plugin {
 		// Always register transcription command - let it fail with helpful errors if not set up
 		this.addCommand({
 			id: 'transcribe-tiktok',
-			name: 'Transcribe TikTok in current note',
+			name: 'Transcribe tiktok in current note',
 			editorCallback: (editor: Editor, view: MarkdownView) => {
 				void this.transcriptionService.transcribeInNote(editor, view);
 			},
@@ -351,7 +351,7 @@ export default class TikTokerPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'start-tiktok-review',
-			name: 'Start TikTok review session',
+			name: 'Start tiktok review session',
 			callback: () => {
 				void this.activateReviewView();
 			}
@@ -376,7 +376,7 @@ export default class TikTokerPlugin extends Plugin {
 		// Always register bulk transcription commands - let them fail with helpful errors if not set up
 		this.addCommand({
 			id: 'transcribe-recent-tiktok-notes',
-			name: 'Transcribe recent TikTok notes (7 days)',
+			name: 'Transcribe recent tiktok notes (7 days)',
 			callback: async () => {
 				const files = await this.getUntranscribedTikTokNotes(7);
 				await this.transcribeTikTokNotes(files, 'recent');
@@ -385,7 +385,7 @@ export default class TikTokerPlugin extends Plugin {
 
 		this.addCommand({
 			id: 'transcribe-all-tiktok-notes',
-			name: 'Transcribe all untranscribed TikTok notes',
+			name: 'Transcribe all untranscribed tiktok notes',
 			callback: async () => {
 				const files = await this.getUntranscribedTikTokNotes();
 				await this.transcribeTikTokNotes(files, 'all');
@@ -397,7 +397,7 @@ export default class TikTokerPlugin extends Plugin {
 			// @ts-expect-error - undocumented Obsidian mobile event
 			this.app.workspace.on('receive-text-menu', (menu: Menu, shareText: string) => {
 				menu.addItem((item: MenuItem) => {
-					item.setTitle('TikToker');
+					item.setTitle('Tiktoker');
 					item.setIcon('video');
 					item.onClick(async () => {
 						// Write shared text to clipboard so processTikTokFromClipboard can read it
@@ -412,7 +412,7 @@ export default class TikTokerPlugin extends Plugin {
 			this.app.workspace.on('url-menu', (menu: Menu, url: string) => {
 				if (this.isTikTokUrl(url)) {
 					menu.addItem((item: MenuItem) => {
-						item.setTitle('TikToker');
+						item.setTitle('Tiktoker');
 						item.setIcon('video');
 						item.onClick(async () => {
 							// Write URL to clipboard so processTikTokFromClipboard can read it
@@ -464,7 +464,7 @@ export default class TikTokerPlugin extends Plugin {
 			const tikTokUrls = this.extractTikTokUrls(clipboardText);
 			
 			if (tikTokUrls.length === 0) {
-				new Notice('Clipboard does not contain any valid TikTok URLs');
+				new Notice('Clipboard does not contain any valid tiktok urls');
 				return;
 			}
 
@@ -476,11 +476,11 @@ export default class TikTokerPlugin extends Plugin {
 				modal.open();
 			} else {
 				// Process single URL (existing behavior)
-				new Notice('Processing TikTok URL...');
+				new Notice('Processing tiktok url...');
 				await this.processTikTokUrl(tikTokUrls[0]);
 			}
 		} catch (error) {
-			new Notice('Failed to read clipboard or process TikTok URL');
+			new Notice('Failed to read clipboard or process tiktok url');
 			console.error('TikToker error:', error);
 		}
 	}
@@ -523,16 +523,16 @@ export default class TikTokerPlugin extends Plugin {
 				urlToProcess = await this.expandUrl(url);
 			}
 
-			new Notice('Fetching TikTok data...');
+			new Notice('Fetching tiktok data...');
 
 			const tikTokData = await this.fetchTikTokData(urlToProcess, false);
 			if (tikTokData) {
 				await this.createTikTokNote(tikTokData, false);
 			} else {
-				new Notice('Failed to fetch TikTok data');
+				new Notice('Failed to fetch tiktok data');
 			}
 		} catch (error) {
-			new Notice('Failed to process TikTok URL');
+			new Notice('Failed to process tiktok url');
 			console.error('TikToker URL processing error:', error);
 		}
 	}
@@ -592,7 +592,7 @@ export default class TikTokerPlugin extends Plugin {
 			
 			return {
 				author: oembedData.author_name || 'Unknown',
-				description: oembedData.title || 'TikTok Video',
+				description: oembedData.title || 'Tiktok video',
 				hashtags: this.extractHashtags(oembedData.title || ''),
 				url: url,
 				expandedUrl: url,
@@ -632,11 +632,11 @@ export default class TikTokerPlugin extends Plugin {
 			
 			if (isSlideshow) {
 				// For photo slideshows, use simple markdown image format
-				const title = `TikTok photo slideshow by ${authorWithAt}`;
+				const title = `Tiktok photo slideshow by ${authorWithAt}`;
 				// Slideshows don't have audio, so skip transcription
 				return {
 					author: author,
-					description: 'TikTok Photo Slideshow',
+					description: 'Tiktok photo slideshow',
 					hashtags: [],
 					url: url,
 					expandedUrl: url,
@@ -652,7 +652,7 @@ export default class TikTokerPlugin extends Plugin {
 				// Regular video fallback - use iframe instead of blockquote
 				return {
 					author: author,
-					description: 'TikTok Post',
+					description: 'Tiktok post',
 					hashtags: [],
 					url: url,
 					expandedUrl: url,
@@ -788,8 +788,8 @@ export default class TikTokerPlugin extends Plugin {
 				// URL expansion failed - this is normal for mobile TikTok short URLs
 				this.debugLog('Mobile: Creating optimized embed for short URL (TikTok limitation)');
 				const shortUrlPattern = this.identifyShortUrlPattern(url).pattern;
-				const description = shortUrlPattern === '/t/' ? 'TikTok Video' : 'TikTok Video (Short Link)';
-				
+				const description = shortUrlPattern === '/t/' ? 'Tiktok video' : 'Tiktok video (short link)';
+
 				// Create a more user-friendly embed that might work in the iframe
 				// Some TikTok short URLs can work in iframes even if server-side expansion fails
 				const embedHtml = `<div class="tiktok-embed">
@@ -800,8 +800,8 @@ export default class TikTokerPlugin extends Plugin {
 	</blockquote>
 	<script async src="https://www.tiktok.com/embed.js"></script>
 </div>`;
-				
-				const markdownFallback = `\n\n**TikTok Link**: [Open in TikTok](${url})\n\n*This TikTok video uses a mobile short link. Click above to view in the TikTok app or browser.*`;
+
+				const markdownFallback = `\n\n**Tiktok link**: [Open in tiktok](${url})\n\n*This tiktok video uses a mobile short link. Click above to view in the tiktok app or browser.*`;
 				
 				return {
 					author: 'Unknown',
@@ -836,7 +836,7 @@ export default class TikTokerPlugin extends Plugin {
 		
 		// Enhanced embed creation with better mobile compatibility
 		const embedHtml = this.createObsidianCompatibleEmbed(null, videoId, expandedUrl);
-		const description = author !== 'tiktok' ? `TikTok from ${authorWithAt}` : 'TikTok Video';
+		const description = author !== 'tiktok' ? `Tiktok from ${authorWithAt}` : 'Tiktok video';
 		
 		// Improved markdown fallback with original URL preservation
 		const markdownFallback = `\n\n**Original URL**: ${url}${url !== expandedUrl ? `\n**Expanded URL**: ${expandedUrl}` : ''}\n\n![${description}](${expandedUrl})`;
@@ -868,12 +868,12 @@ export default class TikTokerPlugin extends Plugin {
 		const postedDate = await this.extractTikTokPostedDate(url, videoId);
 		
 		// Create simple markdown image format
-		const title = `TikTok photo slideshow by ${authorWithAt}`;
+		const title = `Tiktok photo slideshow by ${authorWithAt}`;
 		const embedHtml = `![${title}](${url})`;
-		
+
 		return {
 			author: author,
-			description: 'TikTok Photo Slideshow',
+			description: 'Tiktok photo slideshow',
 			hashtags: [],
 			url: url,
 			expandedUrl: url,
@@ -928,16 +928,16 @@ export default class TikTokerPlugin extends Plugin {
 				
 			case 'show-error':
 				if (!isBulkProcessing) {
-					new Notice(`Cannot access private TikTok video: ${url}`, 5000);
+					new Notice(`Cannot access private tiktok video: ${url}`, 5000);
 				}
 				// Still create a note but with error information
 				return {
 					author: author,
-					description: 'Private TikTok Video - Access Denied',
+					description: 'Private tiktok video - access denied',
 					hashtags: [],
 					url: url,
 					expandedUrl: url,
-					embedHtml: `<p><strong>⚠️ Private Video</strong></p><p>This TikTok video is private and cannot be accessed.</p><p>Original URL: <a href="${url}" target="_blank">${url}</a></p>`,
+					embedHtml: `<p><strong>Private video</strong></p><p>This tiktok video is private and cannot be accessed.</p><p>Original url: <a href="${url}" target="_blank">${url}</a></p>`,
 					videoId: videoId,
 					createdDate: this.getCurrentDateString(),
 					postedDate: postedDate,
@@ -951,11 +951,11 @@ export default class TikTokerPlugin extends Plugin {
 				// Create a minimal note with just the URL and basic info
 				return {
 					author: author,
-					description: 'Private TikTok Video',
+					description: 'Private tiktok video',
 					hashtags: [],
 					url: url,
 					expandedUrl: url,
-					embedHtml: `<p>TikTok video (private): <a href="${url}" target="_blank">${url}</a></p>`,
+					embedHtml: `<p>Tiktok video (private): <a href="${url}" target="_blank">${url}</a></p>`,
 					videoId: videoId,
 					createdDate: this.getCurrentDateString(),
 					postedDate: postedDate,
@@ -1028,12 +1028,12 @@ export default class TikTokerPlugin extends Plugin {
 		}
 		
 		// Fallback if no video ID
-		return `<p>TikTok video: <a href="${url}" target="_blank">${url}</a></p>`;
+		return `<p>Tiktok video: <a href="${url}" target="_blank">${url}</a></p>`;
 	}
 
 	private generateWorkingEmbed(videoId: string | null, url: string): string {
 		if (!videoId) {
-			return `<p>TikTok video: <a href="${url}" target="_blank">${url}</a></p>`;
+			return `<p>Tiktok video: <a href="${url}" target="_blank">${url}</a></p>`;
 		}
 
 		const author = this.extractAuthorFromUrl(url);
@@ -1041,7 +1041,7 @@ export default class TikTokerPlugin extends Plugin {
 		return `<blockquote class="tiktok-embed" cite="${url}" data-video-id="${videoId}" data-embed-from="oembed" style="max-width: 605px; min-width: 325px;">
 <section>
 <a target="_blank" title="${author}" href="https://www.tiktok.com/${author}">${author}</a>
-<p>TikTok Video</p>
+<p>Tiktok video</p>
 <a target="_blank" href="${url}">♬ original sound - ${author.replace('@', '')}</a>
 </section>
 </blockquote>
@@ -1226,19 +1226,19 @@ export default class TikTokerPlugin extends Plugin {
 		
 		try {
 			// Create a reasonable description based on the URL pattern
-			let description = 'TikTok Video';
+			let description = 'Tiktok video';
 			const author = 'Unknown';
-			
+
 			// Try to identify the type of short URL and adjust accordingly
 			if (originalUrl.includes('/t/')) {
-				description = 'TikTok Video (Mobile Link)';
+				description = 'Tiktok video (mobile link)';
 			} else if (originalUrl.includes('vm.tiktok.com')) {
-				description = 'TikTok Video (Shared Link)';
+				description = 'Tiktok video (shared link)';
 			}
 			
 			// Don't create iframe embeds with potentially fake video IDs
 			// Instead create a simple markdown link
-			const embedHtml = `[${description}](${originalUrl})\n\n*This TikTok link could not be fully processed for embedding. Click the link above to view in TikTok.*\n\n**Original URL**: ${originalUrl}`;
+			const embedHtml = `[${description}](${originalUrl})\n\n*This tiktok link could not be fully processed for embedding. Click the link above to view in tiktok.*\n\n**Original url**: ${originalUrl}`;
 			
 			return {
 				success: true,
@@ -1708,7 +1708,7 @@ export default class TikTokerPlugin extends Plugin {
 			.replace(/{{author}}/g, (data.author || 'unknown').replace(/[@#]/g, ''))
 			.replace(/{{date}}/g, data.createdDate || data.date || this.getCurrentDateString())
 			.replace(/{{videoId}}/g, data.videoId || 'unknown')
-			.replace(/{{description}}/g, (data.description || 'TikTok Video').replace(/#[\w\u00c0-\u024f\u1e00-\u1eff]+/gi, '').substring(0, 100).replace(/[^\w\s-]/g, '').trim())
+			.replace(/{{description}}/g, (data.description || 'Tiktok video').replace(/#[\w\u00c0-\u024f\u1e00-\u1eff]+/gi, '').substring(0, 100).replace(/[^\w\s-]/g, '').trim())
 			.replace(/{{title}}/g, (data.description || 'tiktok').replace(/#[\w\u00c0-\u024f\u1e00-\u1eff]+/gi, '').substring(0, 50).replace(/[^\w\s-]/g, ''));
 
 		return this.sanitizeFileName(fileName);
@@ -1770,7 +1770,7 @@ export default class TikTokerPlugin extends Plugin {
 			content += '---\n\n';
 		}
 
-		const embedHtml = data.embedHtml || 'TikTok video embed not available';
+		const embedHtml = data.embedHtml || 'Tiktok video embed not available';
 		const hashtags = data.hashtags ? [...data.hashtags, '#tiktoker'].join(' ') : '#tiktoker';
 		
 		// Clean description by removing hashtags if they exist in the hashtags array
@@ -1950,7 +1950,7 @@ export default class TikTokerPlugin extends Plugin {
 		}
 
 		if (files.length === 0) {
-			new Notice(`No untranscribed TikTok notes found`);
+			new Notice(`No untranscribed tiktok notes found`);
 			return;
 		}
 
@@ -1967,11 +1967,11 @@ export default class TikTokerPlugin extends Plugin {
 		}
 
 		if (urls.length === 0) {
-			new Notice('No TikTok URLs found in selected notes');
+			new Notice('No tiktok urls found in selected notes');
 			return;
 		}
 
-		new Notice(`Starting transcription for ${urls.length} TikTok note${urls.length > 1 ? 's' : ''}...`);
+		new Notice(`Starting transcription for ${urls.length} tiktok note${urls.length > 1 ? 's' : ''}...`);
 		await this.processBulkTikToks(urls, true);
 	}
 
@@ -2108,7 +2108,7 @@ export default class TikTokerPlugin extends Plugin {
 	}
 
 	showTranscriptionSetupNotice() {
-		const notice = new Notice('TikToker: local transcription available! Click to set up.', 0);
+		const notice = new Notice('Tiktoker: local transcription available! Click to set up.', 0);
 		const messageEl = (notice as Notice & { messageEl?: HTMLElement }).messageEl;
 
 		if (messageEl) {
@@ -2480,16 +2480,16 @@ class TikTokerSettingTab extends PluginSettingTab {
 		if (Platform.isMobile) {
 			const mobileNote = container.createEl('div', {cls: 'tiktoker-mobile-note'});
 			mobileNote.createEl('strong', {text: 'Note: '});
-			mobileNote.appendText('Transcription is only available on desktop (Windows, macOS, Linux) from version 1.5.0 onwards. Mobile devices can create TikTok notes but cannot generate transcriptions.');
+			mobileNote.appendText('Transcription is only available on desktop (Windows, macOS, Linux) from version 1.5.0 onwards. Mobile devices can create tiktok notes but cannot generate transcriptions.');
 		}
 
 		const basicSection = this.createCollapsibleSection(container, 'Basic settings');
 
 		new Setting(basicSection)
 			.setName('Output folder')
-			.setDesc('Folder where TikTok notes will be saved')
+			.setDesc('Folder where tiktok notes will be saved')
 			.addText(text => text
-				.setPlaceholder('TikToks')
+				.setPlaceholder('Tiktoks')
 				.setValue(this.plugin.settings.outputFolder)
 				.onChange(async (value) => {
 					this.plugin.settings.outputFolder = value;
@@ -2511,7 +2511,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 			.setName('Note title template')
 			.setDesc('Template for generating note titles')
 			.addText(text => text
-				.setPlaceholder('TikTok on {{description}} from {{author}}')
+				.setPlaceholder('Tiktok on {{description}} from {{author}}')
 				.setValue(this.plugin.settings.noteTitleTemplate)
 				.onChange(async (value) => {
 					this.plugin.settings.noteTitleTemplate = value;
@@ -2551,7 +2551,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(contentSection)
-				.setName('Include URL')
+				.setName('Include url')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.includeUrl)
 					.onChange(async (value) => {
@@ -2560,7 +2560,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(contentSection)
-				.setName('Include expanded URL')
+				.setName('Include expanded url')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.includeExpandedUrl)
 					.onChange(async (value) => {
@@ -2602,7 +2602,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 		new Setting(bulkSection)
 			.setName('Enable bulk processing')
-			.setDesc('Allow processing multiple TikTok URLs at once')
+			.setDesc('Allow processing multiple tiktok urls at once')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableBulkProcessing)
 				.onChange(async (value) => {
@@ -2613,7 +2613,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.enableBulkProcessing) {
 			new Setting(bulkSection)
-				.setName('Bypass modal for single URL')
+				.setName('Bypass modal for single url')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.bypassModalForSingle)
 					.onChange(async (value) => {
@@ -2644,7 +2644,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		const advancedSection = this.createCollapsibleSection(container, 'Advanced', false);
 
 		new Setting(advancedSection)
-			.setName('URL timeout (seconds)')
+			.setName('Url timeout (seconds)')
 			.addSlider(slider => slider
 				.setLimits(5, 30, 1)
 				.setValue(this.plugin.settings.urlTimeout)
@@ -2747,7 +2747,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 			new Setting(mainSection)
 				.setName('Enable manual transcription command')
-				.setDesc('Show "Transcribe TikTok" command in command palette')
+				.setDesc('Show "Transcribe tiktok" command in command palette')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.enableManualTranscriptionCommand)
 					.onChange(async (value) => {
@@ -2829,14 +2829,14 @@ class TikTokerSettingTab extends PluginSettingTab {
 			modelInfo.createEl('div', {text: 'Recommendation: use "base" model for best balance', cls: 'tiktoker-recommendation-inline'});
 
 			new Setting(modelSection)
-				.setName('Whisper model')
+				.setName('whisper model')
 				.setDesc('Select transcription model (restart required)')
 				.addDropdown(dropdown => dropdown
-					.addOption('tiny', 'tiny (75MB)')
-					.addOption('base', 'base (142MB) - recommended')
-					.addOption('small', 'small (466MB)')
-					.addOption('medium', 'medium (1.5GB)')
-					.addOption('large', 'large (2.9GB)')
+					.addOption('tiny', 'tiny (75mb)')
+					.addOption('base', 'base (142mb) - recommended')
+					.addOption('small', 'small (466mb)')
+					.addOption('medium', 'medium (1.5gb)')
+					.addOption('large', 'large (2.9gb)')
 					.setValue(this.plugin.settings.whisperModel)
 					.onChange(async (value: string) => {
 						this.plugin.settings.whisperModel = value as 'tiny' | 'base' | 'small' | 'medium' | 'large';
@@ -2868,7 +2868,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(testSection)
-				.setName('Whisper script path')
+				.setName('whisper script path')
 				.setDesc('Path to transcription script (auto-detected if empty)')
 				.addText(text => text
 					.setPlaceholder('Auto-detect')
@@ -2932,7 +2932,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.enableGlobalCache) {
 			new Setting(cacheSection)
-				.setName('Cache size limit (MB)')
+				.setName('Cache size limit (mb)')
 				.setDesc('Maximum cache size before automatic cleanup')
 				.addSlider(slider => slider
 					.setLimits(50, 1000, 50)
@@ -3032,12 +3032,12 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 		}
 
-		// Dataview Integration Section
-		const dataviewSection = this.createCollapsibleSection(container, 'Dataview integration');
+		// dataview Integration Section
+		const dataviewSection = this.createCollapsibleSection(container, 'dataview integration');
 
 		new Setting(dataviewSection)
-			.setName('Enable Dataview insertion')
-			.setDesc('Insert Dataview queries into created notes')
+			.setName('Enable dataview insertion')
+			.setDesc('Insert dataview queries into created notes')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.reviewQueueEnableDataview)
 				.onChange(async (value) => {
@@ -3048,8 +3048,8 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.reviewQueueEnableDataview) {
 			new Setting(dataviewSection)
-				.setName('Dataview template')
-				.setDesc('Template for Dataview query insertion')
+				.setName('dataview template')
+				.setDesc('Template for dataview query insertion')
 				.addText(text => text
 					.setPlaceholder('LIST')
 					.setValue(this.plugin.settings.reviewQueueDataviewTemplate)
@@ -3160,7 +3160,7 @@ class BulkProcessingModal extends Modal {
 		const {contentEl} = this;
 		contentEl.empty();
 
-		contentEl.createEl('h2', {text: `Found ${this.urls.length} TikTok URLs`});
+		contentEl.createEl('h2', {text: `Found ${this.urls.length} tiktok urls`});
 		contentEl.createEl('p', {text: 'Select which URLs you want to process:'});
 
 		// Select All / Deselect All buttons
@@ -3257,7 +3257,7 @@ class BulkProgressModal extends Modal {
 	createModalContent() {
 		const {contentEl} = this;
 
-		contentEl.createEl('h2', {text: 'Processing TikTok URLs'});
+		contentEl.createEl('h2', {text: 'Processing tiktok urls'});
 		
 		this.statusText = contentEl.createEl('p', {text: 'Starting...'});
 		
@@ -3333,7 +3333,7 @@ class BulkProgressModal extends Modal {
 		};
 
 		const progressText = this.minimalToast.createDiv({cls: 'tiktoker-progress-text'});
-		progressText.textContent = `Processing TikToks: ${this.current} / ${this.total}`;
+		progressText.textContent = `Processing tiktoks: ${this.current} / ${this.total}`;
 
 		const miniProgressBar = this.minimalToast.createDiv({cls: 'tiktoker-mini-progress-bar'});
 		const miniProgress = miniProgressBar.createDiv({cls: 'tiktoker-mini-progress tiktoker-progress-dynamic'});
@@ -3355,7 +3355,7 @@ class BulkProgressModal extends Modal {
 		const miniProgress = this.minimalToast.querySelector('div > div > div');
 		
 		if (progressText) {
-			progressText.textContent = `Processing TikToks: ${this.current} / ${this.total}`;
+			progressText.textContent = `Processing tiktoks: ${this.current} / ${this.total}`;
 		}
 
 		if (miniProgress) {
@@ -3410,7 +3410,7 @@ class BulkProgressModal extends Modal {
 			} else if (inProgress > 0) {
 				this.transcriptionStatusText.textContent = `Transcribing ${inProgress} / Completed ${completed} of ${this.transcriptionTasks.size}`;
 			} else {
-				this.transcriptionStatusText.textContent = `Transcribed ${completed}/${this.transcriptionTasks.size} TikToks`;
+				this.transcriptionStatusText.textContent = `Transcribed ${completed}/${this.transcriptionTasks.size} tiktoks`;
 			}
 		}
 
@@ -3426,7 +3426,7 @@ class BulkProgressModal extends Modal {
 
 		// Get display name from TikTok data
 		const data = this.tiktokData.get(url);
-		let displayName = 'TikTok';
+		let displayName = 'Tiktok';
 
 		if (data) {
 			// Prefer description, then author
@@ -3632,7 +3632,7 @@ class BulkResultsModal extends Modal {
 		}
 
 		if (this.failed.length > 0) {
-			contentEl.createEl('h3', {text: 'Failed URLs:'});
+			contentEl.createEl('h3', {text: 'Failed urls:'});
 			
 			const failedContainer = contentEl.createDiv({cls: 'tiktoker-failed-urls'});
 
@@ -3645,7 +3645,7 @@ class BulkResultsModal extends Modal {
 			// Action buttons
 			const buttonContainer = contentEl.createDiv({cls: 'tiktoker-modal-button-container'});
 
-			const retryBtn = buttonContainer.createEl('button', {text: 'Retry failed URLs', cls: 'mod-cta'});
+			const retryBtn = buttonContainer.createEl('button', {text: 'Retry failed urls', cls: 'mod-cta'});
 			retryBtn.onclick = () => {
 				const failedUrls = this.failed.map(item => item.url);
 				this.onRetry(failedUrls);
@@ -3674,7 +3674,7 @@ class BulkResultsModal extends Modal {
 			const tikTokData = await this.plugin.fetchTikTokDataPublic(expandedUrl);
 
 			if (!tikTokData) {
-				new Notice('Failed to fetch TikTok data');
+				new Notice('Failed to fetch tiktok data');
 				return;
 			}
 
@@ -3787,7 +3787,7 @@ class TikTokReviewView extends ItemView {
 	}
 
 	getDisplayText(): string {
-		return 'TikTok review';
+		return 'Tiktok review';
 	}
 
 	getIcon(): string {
@@ -3813,7 +3813,7 @@ class TikTokReviewView extends ItemView {
 
 		// Header
 		this.containerDiv.createEl('h4', {
-			text: 'TikTok review queue',
+			text: 'Tiktok review queue',
 			cls: 'tiktoker-review-header'
 		});
 
@@ -3841,8 +3841,8 @@ class TikTokReviewView extends ItemView {
 		manageSessionBtn.addEventListener('click', () => this.openSessionManagementModal());
 
 		if (this.plugin.settings.reviewQueueEnableDataview) {
-			const dataviewBtn = sessionControlsDiv.createEl('button', { text: 'Dataview', cls: 'tiktoker-review-manage-btn' });
-			dataviewBtn.title = 'Insert Dataview to current note';
+			const dataviewBtn = sessionControlsDiv.createEl('button', { text: 'dataview', cls: 'tiktoker-review-manage-btn' });
+			dataviewBtn.title = 'Insert dataview to current note';
 			dataviewBtn.addEventListener('click', () => void this.insertDataviewToCurrentNote());
 		}
 
@@ -3973,7 +3973,7 @@ class TikTokReviewView extends ItemView {
 		this.quickNotesDiv.createEl('label', { text: 'Quick note:', cls: 'tiktoker-review-quick-notes-label' });
 		this.quickNotesTextarea = this.quickNotesDiv.createEl('textarea', {
 			cls: 'tiktoker-review-quick-notes-textarea',
-			attr: { placeholder: 'Add a note about this TikTok...' }
+			attr: { placeholder: 'Add a note about this tiktok...' }
 		});
 		this.addNoteButton = this.quickNotesDiv.createEl('button', {
 			text: 'Add note',
@@ -4114,7 +4114,7 @@ class TikTokReviewView extends ItemView {
 	}
 
 	async loadQueue() {
-		const tiktokFolder = this.plugin.settings.outputFolder || 'TikToks';
+		const tiktokFolder = this.plugin.settings.outputFolder || 'Tiktoks';
 
 		// Get all files in the TikTok folder
 		const allFiles = this.app.vault.getMarkdownFiles()
@@ -4250,7 +4250,7 @@ class TikTokReviewView extends ItemView {
 			this.embedDiv.empty();
 			this.embedDiv.createDiv({
 				cls: 'tiktoker-review-empty',
-				text: 'No TikToks match the current filters.'
+				text: 'No tiktoks match the current filters.'
 			});
 			this.metadataDiv.empty();
 			this.noteContentDiv.empty();
@@ -4286,7 +4286,7 @@ class TikTokReviewView extends ItemView {
 				this.embedDiv.appendChild(script);
 			}
 		} else {
-			this.embedDiv.createDiv({ text: 'TikTok embed not found in note' });
+			this.embedDiv.createDiv({ text: 'Tiktok embed not found in note' });
 		}
 
 		// Show metadata - just title
@@ -4909,7 +4909,7 @@ class TikTokReviewView extends ItemView {
 		}
 
 		// Build dataview query based on active filters
-		const outputFolder = this.plugin.settings.outputFolder || 'TikToks';
+		const outputFolder = this.plugin.settings.outputFolder || 'Tiktoks';
 		let whereClause = '';
 		let titleText = '';
 
@@ -4937,14 +4937,14 @@ FROM "${outputFolder}"
 ${whereClause}
 \`\`\``;
 
-		const heading = `## Linked TikToks: ${titleText}`;
+		const heading = `## Linked tiktoks: ${titleText}`;
 		const contentToInsert = `\n\n${heading}\n\n${dataviewQuery}\n`;
 
 		try {
 			// Append to end using atomic process operation
 			await this.app.vault.process(activeFile, (data) => data + contentToInsert);
 
-			new Notice(`Dataview query added to ${activeFile.basename}`);
+			new Notice(`dataview query added to ${activeFile.basename}`);
 		} catch (error) {
 			console.error('Failed to insert dataview:', error);
 			new Notice('Failed to insert dataview query');

@@ -74,7 +74,7 @@ export class TranscriptionService {
 		const matches = content.match(tiktokUrlPattern);
 
 		if (!matches || matches.length === 0) {
-			new Notice('No TikTok URLs found in current note');
+			new Notice('No tiktok urls found in current note');
 			return;
 		}
 
@@ -115,7 +115,7 @@ export class TranscriptionService {
 				throw new Error('Whisper script not found at configured path');
 			}
 
-			new Notice('Generating transcription with local Whisper...');
+			new Notice('Generating transcription with local whisper...');
 
 			const env = {
 				...process.env,
@@ -540,7 +540,7 @@ export class SingleTranscriptionModal extends Modal {
 		const header = contentEl.createDiv({cls: 'tiktoker-modal-header-flex'});
 
 		const titleSection = header.createDiv();
-		titleSection.createEl('h3', {text: 'TikTok processing', cls: 'modal-title tiktoker-modal-title-margin'});
+		titleSection.createEl('h3', {text: 'Tiktok processing', cls: 'modal-title tiktoker-modal-title-margin'});
 		titleSection.createEl('div', {text: `by ${this.data.author}`, cls: 'tiktoker-modal-subtitle'});
 
 		const minimizeBtn = header.createEl('button', {text: '−', cls: 'tiktoker-minimize-btn'});
