@@ -1679,7 +1679,7 @@ export default class TikTokerPlugin extends Plugin {
 		return new Promise((resolve) => {
 			const modal = new Modal(this.app);
 			modal.contentEl.createEl('h3', {text: 'Generate transcription?'});
-			modal.contentEl.createEl('p', {text: `Transcribe this TikTok by ${author}?`});
+			modal.contentEl.createEl('p', {text: `Transcribe this tiktok by ${author}?`});
 			modal.contentEl.createEl('p', {text: 'This may take 30-60 seconds.', cls: 'tiktoker-modal-subtitle'});
 
 			const buttonContainer = modal.contentEl.createDiv({cls: 'tiktoker-button-container-end'});

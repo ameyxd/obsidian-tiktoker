@@ -176,8 +176,8 @@ export interface TikTokerSettings {
 }
 
 export const DEFAULT_SETTINGS: TikTokerSettings = {
-	outputFolder: 'TikToks',
-	fileNamingPattern: 'TikTok by {{author}} on {{description}}',
+	outputFolder: 'Tiktoks',
+	fileNamingPattern: 'Tiktok by {{author}} on {{description}}',
 	includeHashtagsInContent: true,
 	hashtagDisplayFormat: '#{{tag}}',
 	enableProperties: true,

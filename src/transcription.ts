@@ -256,7 +256,7 @@ export class TranscriptionService {
 			this.activeTranscriptionModal.close();
 		}
 
-		const fileName = filePath.split('/').pop()?.replace(/\.md$/, '') || 'TikTok';
+		const fileName = filePath.split('/').pop()?.replace(/\.md$/, '') || 'Tiktok';
 		this.activeTranscriptionModal = new SingleTranscriptionModal(this.app, fileName, data, this);
 		this.activeTranscriptionModal.open();
 
