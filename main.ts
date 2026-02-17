@@ -476,11 +476,11 @@ export default class TikTokerPlugin extends Plugin {
 				modal.open();
 			} else {
 				// Process single URL (existing behavior)
-				new Notice('Processing tiktok url...');
+				new Notice('Processing tiktok URL...');
 				await this.processTikTokUrl(tikTokUrls[0]);
 			}
 		} catch (error) {
-			new Notice('Failed to read clipboard or process tiktok url');
+			new Notice('Failed to read clipboard or process tiktok URL');
 			console.error('TikToker error:', error);
 		}
 	}
@@ -532,7 +532,7 @@ export default class TikTokerPlugin extends Plugin {
 				new Notice('Failed to fetch tiktok data');
 			}
 		} catch (error) {
-			new Notice('Failed to process tiktok url');
+			new Notice('Failed to process tiktok URL');
 			console.error('TikToker URL processing error:', error);
 		}
 	}
@@ -620,7 +620,7 @@ export default class TikTokerPlugin extends Plugin {
 			}
 
 			if (!isBulkProcessing) {
-				new Notice('oEmbed failed, using fallback embed method');
+				new Notice('Embed failed, using fallback embed method');
 			}
 			
 			const postedDate = await this.extractTikTokPostedDate(url, videoId);
@@ -2326,7 +2326,7 @@ class DependencyCheckModal extends Modal {
 			// Platform-specific intro
 			if (this.platform === 'darwin' && !this.dependencies.python3 && !this.dependencies.ytdlp && !this.dependencies.ffmpeg) {
 				const homebrewNote = instructions.createDiv({cls: 'tiktoker-homebrew-note'});
-				homebrewNote.createEl('strong', {text: 'First, install Homebrew (package manager): '});
+				homebrewNote.createEl('strong', {text: 'First, install homebrew (package manager): '});
 				homebrewNote.createEl('br');
 				homebrewNote.createEl('br');
 				const brewCode = homebrewNote.createEl('code', {cls: 'tiktoker-code-inline'});
@@ -2551,7 +2551,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(contentSection)
-				.setName('Include url')
+				.setName('Include URL')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.includeUrl)
 					.onChange(async (value) => {
@@ -2560,7 +2560,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(contentSection)
-				.setName('Include expanded url')
+				.setName('Include expanded URL')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.includeExpandedUrl)
 					.onChange(async (value) => {
@@ -2613,7 +2613,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.enableBulkProcessing) {
 			new Setting(bulkSection)
-				.setName('Bypass modal for single url')
+				.setName('Bypass modal for single URL')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.bypassModalForSingle)
 					.onChange(async (value) => {
@@ -2644,7 +2644,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		const advancedSection = this.createCollapsibleSection(container, 'Advanced', false);
 
 		new Setting(advancedSection)
-			.setName('Url timeout (seconds)')
+			.setName('URL timeout (seconds)')
 			.addSlider(slider => slider
 				.setLimits(5, 30, 1)
 				.setValue(this.plugin.settings.urlTimeout)
@@ -2747,7 +2747,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 			new Setting(mainSection)
 				.setName('Enable manual transcription command')
-				.setDesc('Show "Transcribe tiktok" command in command palette')
+				.setDesc('Show "transcribe tiktok" command in command palette')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.enableManualTranscriptionCommand)
 					.onChange(async (value) => {
@@ -2829,14 +2829,14 @@ class TikTokerSettingTab extends PluginSettingTab {
 			modelInfo.createEl('div', {text: 'Recommendation: use "base" model for best balance', cls: 'tiktoker-recommendation-inline'});
 
 			new Setting(modelSection)
-				.setName('whisper model')
+				.setName('Whisper model')
 				.setDesc('Select transcription model (restart required)')
 				.addDropdown(dropdown => dropdown
-					.addOption('tiny', 'tiny (75mb)')
-					.addOption('base', 'base (142mb) - recommended')
-					.addOption('small', 'small (466mb)')
-					.addOption('medium', 'medium (1.5gb)')
-					.addOption('large', 'large (2.9gb)')
+					.addOption('tiny', 'Tiny (75 mb)')
+					.addOption('base', 'Base (142 mb) - recommended')
+					.addOption('small', 'Small (466 mb)')
+					.addOption('medium', 'Medium (1.5 gb)')
+					.addOption('large', 'Large (2.9 gb)')
 					.setValue(this.plugin.settings.whisperModel)
 					.onChange(async (value: string) => {
 						this.plugin.settings.whisperModel = value as 'tiny' | 'base' | 'small' | 'medium' | 'large';
@@ -2868,7 +2868,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 					}));
 
 			new Setting(testSection)
-				.setName('whisper script path')
+				.setName('Whisper script path')
 				.setDesc('Path to transcription script (auto-detected if empty)')
 				.addText(text => text
 					.setPlaceholder('Auto-detect')
@@ -3048,7 +3048,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 		if (this.plugin.settings.reviewQueueEnableDataview) {
 			new Setting(dataviewSection)
-				.setName('dataview template')
+				.setName('Dataview template')
 				.setDesc('Template for dataview query insertion')
 				.addText(text => text
 					.setPlaceholder('LIST')
@@ -3161,7 +3161,7 @@ class BulkProcessingModal extends Modal {
 		contentEl.empty();
 
 		contentEl.createEl('h2', {text: `Found ${this.urls.length} tiktok urls`});
-		contentEl.createEl('p', {text: 'Select which URLs you want to process:'});
+		contentEl.createEl('p', {text: 'Select which urls you want to process:'});
 
 		// Select All / Deselect All buttons
 		const buttonContainer = contentEl.createDiv({cls: 'tiktoker-bulk-select-buttons'});
@@ -3841,7 +3841,7 @@ class TikTokReviewView extends ItemView {
 		manageSessionBtn.addEventListener('click', () => this.openSessionManagementModal());
 
 		if (this.plugin.settings.reviewQueueEnableDataview) {
-			const dataviewBtn = sessionControlsDiv.createEl('button', { text: 'dataview', cls: 'tiktoker-review-manage-btn' });
+			const dataviewBtn = sessionControlsDiv.createEl('button', { text: 'Dataview', cls: 'tiktoker-review-manage-btn' });
 			dataviewBtn.title = 'Insert dataview to current note';
 			dataviewBtn.addEventListener('click', () => void this.insertDataviewToCurrentNote());
 		}
@@ -4722,7 +4722,7 @@ class TikTokReviewView extends ItemView {
 
 		// Add "New Session..." option
 		this.sessionDropdown.createEl('option', {
-			text: '+ New session...',
+			text: '+ new session...',
 			value: '__new__'
 		});
 

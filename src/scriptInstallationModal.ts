@@ -36,7 +36,7 @@ export class ScriptInstallationModal extends Modal {
 
 		const description = this.contentContainer.createDiv({ cls: 'install-description' });
 		description.createEl('p', {
-			text: 'Tiktoker can transcribe videos locally using OpenAI\'s whisper model.'
+			text: 'This plugin can transcribe videos locally using the whisper model.'
 		});
 		description.createEl('p', {
 			text: 'To use this feature, you need to install the transcription scripts.'
@@ -230,7 +230,7 @@ export class ScriptInstallationModal extends Modal {
 			new Notice('Plugin path copied to clipboard');
 		};
 
-		instructions.createEl('p', { text: '4. Reload the Tiktoker plugin in Obsidian settings' });
+		instructions.createEl('p', { text: '4. Reload this plugin in Obsidian settings' });
 
 		const buttonContainer = instructionsDiv.createDiv({cls: 'tiktoker-button-row-flex'});
 
