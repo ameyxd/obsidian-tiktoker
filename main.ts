@@ -4382,30 +4382,32 @@ class TikTokReviewView extends ItemView {
 
 			saveButton.addEventListener('click', () => {
 				const newContent = textarea.value;
-				// Replace the Description and Transcription sections in the original content
-				let updatedContent = content;
 
-				if (descMatch && newContent.includes('## Description')) {
-					const newDescMatch = newContent.match(/## Description\s*([\s\S]*?)(?=##|$)/);
-					if (newDescMatch) {
-						updatedContent = updatedContent.replace(
-							/## Description[\s\S]*?(?=##|$)/,
-							`## Description\n${newDescMatch[1].trim()}\n\n`
-						);
+				void this.app.vault.process(currentFile, (data) => {
+					let updatedContent = data;
+
+					if (/## Description/.test(data) && newContent.includes('## Description')) {
+						const newDescMatch = newContent.match(/## Description\s*([\s\S]*?)(?=##|$)/);
+						if (newDescMatch) {
+							updatedContent = updatedContent.replace(
+								/## Description[\s\S]*?(?=##|$)/,
+								`## Description\n${newDescMatch[1].trim()}\n\n`
+							);
+						}
 					}
-				}
 
-				if (transMatch && newContent.includes('## Transcription')) {
-					const newTransMatch = newContent.match(/## Transcription\s*([\s\S]*?)(?=##|$)/);
-					if (newTransMatch) {
-						updatedContent = updatedContent.replace(
-							/## Transcription[\s\S]*?(?=##|$)/,
-							`## Transcription\n${newTransMatch[1].trim()}`
-						);
+					if (/## Transcription/.test(data) && newContent.includes('## Transcription')) {
+						const newTransMatch = newContent.match(/## Transcription\s*([\s\S]*?)(?=##|$)/);
+						if (newTransMatch) {
+							updatedContent = updatedContent.replace(
+								/## Transcription[\s\S]*?(?=##|$)/,
+								`## Transcription\n${newTransMatch[1].trim()}`
+							);
+						}
 					}
-				}
 
-				void this.app.vault.process(currentFile, () => updatedContent).then(() => {
+					return updatedContent;
+				}).then(() => {
 					new Notice('Content saved');
 				});
 			});
@@ -4506,21 +4508,17 @@ class TikTokReviewView extends ItemView {
 		}
 
 		const currentFile = this.queue[this.currentIndex];
-		let content = await this.app.vault.read(currentFile);
 
-		// Check if ## Notes section exists
-		if (content.includes('## Notes')) {
-			// Append to existing Notes section
-			content = content.replace(
-				/(## Notes[\s\S]*?)(?=\n##|$)/,
-				`$1\n- ${noteText}`
-			);
-		} else {
-			// Add new Notes section at the end
-			content += `\n\n## Notes\n- ${noteText}`;
-		}
-
-		await this.app.vault.process(currentFile, () => content);
+		await this.app.vault.process(currentFile, (data) => {
+			if (data.includes('## Notes')) {
+				return data.replace(
+					/(## Notes[\s\S]*?)(?=\n##|$)/,
+					`$1\n- ${noteText}`
+				);
+			} else {
+				return data + `\n\n## Notes\n- ${noteText}`;
+			}
+		});
 		this.quickNotesTextarea.value = '';
 		new Notice('Note added');
 	}
@@ -4601,7 +4599,7 @@ class TikTokReviewView extends ItemView {
 		try {
 			// Restore the original content
 			const contentToRestore = this.undoState.content;
-			await this.app.vault.process(this.undoState.file, () => contentToRestore);
+			await this.app.vault.modify(this.undoState.file, contentToRestore);
 			new Notice('Undone');
 
 			// Reload queue and re-render
