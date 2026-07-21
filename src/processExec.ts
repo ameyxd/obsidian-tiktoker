@@ -74,6 +74,11 @@ export function execWithHardTimeout(
 			settled = true;
 			clearTimeout(timeoutTimer);
 			if (graceTimer) clearTimeout(graceTimer);
+			// Stop accumulating output and release the pipe read-ends so a
+			// surviving descendant cannot keep handles (and the event loop)
+			// alive after the caller has its answer
+			child.stdout?.destroy();
+			child.stderr?.destroy();
 			settle();
 		};
 
@@ -106,11 +111,17 @@ export function execWithHardTimeout(
 
 		// 'close' delivers all output but never fires while an orphan holds the
 		// pipes; 'exit' always fires. Use 'close' when it comes, with 'exit' +
-		// grace period as the settlement guarantee.
+		// grace period as the settlement guarantee. Settling through the grace
+		// fallback means a descendant still holds the pipes, so the leftover
+		// process group is killed before settling — matching exec semantics:
+		// when the command is done, nothing of it should remain.
 		child.on('close', (code) => settleWithCode(code));
 		child.on('exit', (code) => {
 			if (settled) return;
-			graceTimer = setTimeout(() => settleWithCode(code), STDIO_FLUSH_GRACE_MS);
+			graceTimer = setTimeout(() => {
+				killProcessTree(childProcess, child);
+				settleWithCode(code);
+			}, STDIO_FLUSH_GRACE_MS);
 		});
 	});
 }
