@@ -41,24 +41,31 @@ function readPid(pidFile: string): number {
 	return pid;
 }
 
+// The POSIX-shell fixtures (sh syntax, $!, ps) cannot run on Windows; the
+// cross-platform tests below use node -e so they exercise the Windows spawn
+// and taskkill paths on Windows CI.
+const posixOnly = describe.skipIf(process.platform === 'win32');
+
 describe('execWithHardTimeout', () => {
 	test('resolves with stdout for a successful command', async () => {
-		const result = await execWithHardTimeout(childProcess, 'echo hello', env, 5000);
+		const result = await execWithHardTimeout(childProcess, 'node -e "console.log(\'hello\')"', env, 15000);
 		expect(result.stdout.trim()).toBe('hello');
-	});
+	}, 20000);
 
 	test('rejects with stderr in the message for a failing command', async () => {
 		await expect(
-			execWithHardTimeout(childProcess, 'echo boom >&2; exit 3', env, 5000)
+			execWithHardTimeout(childProcess, 'node -e "console.error(\'boom\'); process.exit(3)"', env, 15000)
 		).rejects.toThrow(/boom/);
-	});
+	}, 20000);
 
 	test('rejects with ETIMEDOUT on timeout', async () => {
 		await expect(
-			execWithHardTimeout(childProcess, 'sleep 30', env, 300)
+			execWithHardTimeout(childProcess, 'node -e "setTimeout(function(){}, 30000)"', env, 500)
 		).rejects.toMatchObject({ code: 'ETIMEDOUT' });
-	});
+	}, 20000);
+});
 
+posixOnly('execWithHardTimeout process tree cleanup (POSIX)', () => {
 	test('kills the whole process tree on timeout, not just the shell', async () => {
 		// The shell backgrounds a grandchild and records its PID; after the
 		// timeout fires, that grandchild must be dead too — child_process.exec
