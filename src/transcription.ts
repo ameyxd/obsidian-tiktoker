@@ -1,4 +1,5 @@
 import { App, Editor, MarkdownView, Modal, Notice, Platform, TFile } from 'obsidian';
+import { parseWhisperStdout, transcriptionTimeoutMs } from './whisperOutput';
 
 // Simple data interface for transcription modal display
 interface TranscriptionModalData {
@@ -105,11 +106,8 @@ export class TranscriptionService {
 
 		try {
 			const childProcess = window.require('child_process') as typeof import('child_process');
-			const util = window.require('util') as typeof import('util');
 			const fs = window.require('fs') as typeof import('fs');
 			const path = window.require('path') as typeof import('path');
-
-			const execAsync = util.promisify(childProcess.exec);
 
 			if (!fs.existsSync(this.settings.whisperScriptPath)) {
 				throw new Error('Whisper script not found at configured path');
@@ -146,11 +144,12 @@ export class TranscriptionService {
 				try {
 					this.debugLog(`Trying transcription approach ${approach.name}`);
 
-					const { stdout, stderr } = await execAsync(approach.command, {
-						timeout: 120000,
-						maxBuffer: 1024 * 1024,
-						env: env
-					});
+					const { stdout, stderr } = await this.execWithHardTimeout(
+						childProcess,
+						approach.command,
+						env,
+						transcriptionTimeoutMs(this.settings.urlTimeout)
+					);
 
 					if (stderr) {
 						this.debugLog(`Whisper stderr (${approach.name}):`, stderr);
@@ -229,11 +228,11 @@ export class TranscriptionService {
 				progressCallback('Processing audio...', 0);
 			}
 
-			const transcription = await this.getTranscription(url, videoId, true);
+			const transcription = await this.getTranscription(url, videoId, isBulkProcessing);
 			const timeElapsed = Date.now() - startTime;
 
 			if (transcription) {
-				await this.updateFileWithTranscription(filePath, transcription, true);
+				await this.updateFileWithTranscription(filePath, transcription, isBulkProcessing);
 				if (progressCallback) {
 					progressCallback('Completed', timeElapsed);
 				}
@@ -324,6 +323,59 @@ export class TranscriptionService {
 		return '';
 	}
 
+	// child_process.exec with a timeout that always settles. Node's built-in
+	// exec timeout only signals the shell; the script's children (yt-dlp,
+	// python) survive, keep the stdio pipes open, and the promise never
+	// resolves — which left the transcription modal stuck forever. Running the
+	// child in its own process group and SIGKILLing the group guarantees both
+	// cleanup and settlement.
+	private execWithHardTimeout(
+		childProcess: typeof import('child_process'),
+		command: string,
+		env: Record<string, string | undefined>,
+		timeoutMs: number
+	): Promise<{ stdout: string; stderr: string }> {
+		return new Promise((resolve, reject) => {
+			let settled = false;
+
+			// detached puts the shell in its own process group so the whole
+			// pipeline can be killed; exec forwards it to spawn at runtime
+			// even though ExecOptions does not declare it
+			const options = { maxBuffer: 1024 * 1024, env, detached: true } as import('child_process').ExecOptions;
+			const child = childProcess.exec(
+				command,
+				options,
+				(error: Error | null, stdout: string | Buffer, stderr: string | Buffer) => {
+					if (settled) return;
+					settled = true;
+					window.clearTimeout(timer);
+					if (error) {
+						reject(error);
+					} else {
+						resolve({ stdout: String(stdout), stderr: String(stderr) });
+					}
+				}
+			);
+
+			const timer = window.setTimeout(() => {
+				if (settled) return;
+				settled = true;
+				try {
+					if (child.pid) {
+						process.kill(-child.pid, 'SIGKILL');
+					} else {
+						child.kill('SIGKILL');
+					}
+				} catch {
+					child.kill('SIGKILL');
+				}
+				const timeoutError = new Error(`Transcription timed out after ${Math.round(timeoutMs / 1000)}s`) as Error & { code: string };
+				timeoutError.code = 'ETIMEDOUT';
+				reject(timeoutError);
+			}, timeoutMs);
+		});
+	}
+
 	private async getWhisperLocalTranscription(url: string, videoId: string | null, isBulkProcessing = false): Promise<string> {
 		if (Platform.isMobile) {
 			if (!isBulkProcessing) {
@@ -370,7 +422,7 @@ export class TranscriptionService {
 				new Notice('Generating transcription...');
 			}
 
-			const transcriptionTimeout = (this.settings.urlTimeout + 60) * 1000;
+			const transcriptionTimeout = transcriptionTimeoutMs(this.settings.urlTimeout);
 
 			// Platform detection
 			const isWindows = process.platform === 'win32';
@@ -428,41 +480,13 @@ export class TranscriptionService {
 
 					this.debugLog(`Trying transcription with ${browser}:`, command);
 
-					const { stdout, stderr } = await execAsync(command, {
-						timeout: transcriptionTimeout,
-						maxBuffer: 1024 * 1024,
-						env: env
-					});
+					const { stdout, stderr } = await this.execWithHardTimeout(childProcess, command, env, transcriptionTimeout);
 
 					if (stderr) {
 						this.debugLog(`Whisper stderr (${browser}):`, stderr);
 					}
 
-					const lines = stdout.split('\n');
-					const transcriptionLines = [];
-
-					for (const line of lines) {
-						const trimmedLine = line.trim();
-
-						// Filter out yt-dlp and script output
-						if (trimmedLine.startsWith('[') ||  // All bracketed messages [TikTok], [info], [download], [vm.tiktok], etc.
-							trimmedLine.startsWith('Extracting') ||
-							trimmedLine.startsWith('Extracted') ||
-							trimmedLine.startsWith('Deleting') ||
-							trimmedLine.startsWith('Saved:') ||
-							trimmedLine.startsWith('Downloading') ||
-							trimmedLine.includes('% of') ||
-							trimmedLine.includes('MiB/s') ||
-							trimmedLine.includes('ETA')) {
-							continue;
-						}
-
-						if (trimmedLine.length > 0) {
-							transcriptionLines.push(trimmedLine);
-						}
-					}
-
-					const transcription = transcriptionLines.join(' ').trim();
+					const transcription = parseWhisperStdout(stdout);
 					if (transcription) {
 						if (!isBulkProcessing) {
 							new Notice('Transcription completed');
@@ -536,6 +560,11 @@ export class SingleTranscriptionModal extends Modal {
 		contentEl.empty();
 
 		this.modalEl.addClass('tiktoker-modal-fixed-top-right');
+
+		// This modal is a status card, not a dialog: hide the full-screen
+		// backdrop and let clicks pass through so the workspace stays usable
+		// while transcription runs
+		this.containerEl.addClass('tiktoker-modal-nonblocking');
 
 		const header = contentEl.createDiv({cls: 'tiktoker-modal-header-flex'});
 

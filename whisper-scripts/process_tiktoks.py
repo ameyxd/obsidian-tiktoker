@@ -21,6 +21,22 @@ def sh_capture(cmd, cwd=None):
     out, err = p.communicate()
     return p.returncode, out, err
 
+_YTDLP_CACHE = None
+
+def ytdlp_cmd():
+    """Prefer the shared venv yt-dlp (curl_cffi impersonation, required by
+    TikTok) over the system one. Returns (cmd_list, can_impersonate)."""
+    global _YTDLP_CACHE
+    if _YTDLP_CACHE is None:
+        script_dir = Path(__file__).resolve().parent
+        py = script_dir / ".tiktok2text-venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        _YTDLP_CACHE = (["yt-dlp"], False)
+        if py.exists():
+            code, _, _ = sh_capture([str(py), "-c", "import yt_dlp, curl_cffi"])
+            if code == 0:
+                _YTDLP_CACHE = ([str(py), "-m", "yt_dlp"], True)
+    return _YTDLP_CACHE
+
 def extract_url_from_frontmatter(md_path: Path):
     txt = md_path.read_text(encoding="utf-8", errors="ignore")
     m = re.match(r"^---\s*\n(.*?\n)---\s*\n", txt, flags=re.DOTALL)
@@ -53,7 +69,9 @@ def tiktok_key(url: str) -> str:
         return m.group(1)
 
     # Try to resolve the real video id via yt-dlp (no download)
-    code, out, _ = sh_capture(["yt-dlp", "-O", "%(id)s", url])
+    ytdlp, can_impersonate = ytdlp_cmd()
+    probe_cmd = ytdlp + (["--impersonate", "chrome"] if can_impersonate else []) + ["-O", "%(id)s", url]
+    code, out, _ = sh_capture(probe_cmd)
     vid = (out or "").strip()
     if code == 0 and vid:
         return vid
@@ -130,9 +148,13 @@ def download_wav(url: str, out_path: Path, args) -> bool:
     if out_path.exists():
         return True
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "yt-dlp", url,
+    ytdlp, can_impersonate = ytdlp_cmd()
+    cmd = ytdlp + [
+        url,
         "--extract-audio","--audio-format","wav","--audio-quality","0",
+        # TikTok's bytevc1 (h265) formats often lack the audio track despite
+        # claiming aac, so prefer h264 formats, then audio-only, then rest
+        "-f","b[vcodec^=h264]/ba/b",
         "--no-playlist","--referer","https://www.tiktok.com/",
         "--user-agent", args.user_agent,
         "--concurrent-fragments","1",
@@ -142,6 +164,7 @@ def download_wav(url: str, out_path: Path, args) -> bool:
         "--sleep-requests", str(args.sleep_requests),
         "-o", str(out_path.with_suffix(".%(ext)s")),
     ]
+    if can_impersonate: cmd += ["--impersonate", "chrome"]
     if args.limit_rate: cmd += ["--limit-rate", args.limit_rate]
     if args.cookies_file: cmd += ["--cookies", args.cookies_file]
     elif args.browser and args.browser.lower() in ("chrome","safari"):
