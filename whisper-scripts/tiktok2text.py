@@ -38,9 +38,12 @@ def get_python_executable():
 
 
 def check_dependencies():
-    """Check if required dependencies are installed."""
+    """Check if required dependencies are installed.
+
+    yt-dlp is intentionally not checked here: ensure_venv() installs a
+    self-contained yt-dlp into the venv, so a system yt-dlp is only a
+    fallback (validated in get_ytdlp_command)."""
     required = {
-        'yt-dlp': 'yt-dlp',
         'ffmpeg': 'ffmpeg'
     }
 
@@ -135,6 +138,17 @@ def get_ytdlp_command():
     )
     if result.returncode == 0:
         return [str(python_exe), "-m", "yt_dlp"], True
+
+    if shutil.which("yt-dlp") is None:
+        print("yt-dlp is not available: the venv install failed and no system yt-dlp was found.", file=sys.stderr)
+        if platform.system() == 'Windows':
+            print("Install with: winget install yt-dlp.yt-dlp", file=sys.stderr)
+        elif platform.system() == 'Darwin':
+            print("Install with: brew install yt-dlp", file=sys.stderr)
+        else:
+            print("Install with: sudo apt install yt-dlp (or pipx install yt-dlp)", file=sys.stderr)
+        sys.exit(2)
+
     return ["yt-dlp"], False
 
 

@@ -1,5 +1,6 @@
 import { App, Editor, MarkdownView, Modal, Notice, Platform, TFile } from 'obsidian';
 import { parseWhisperStdout, transcriptionTimeoutMs } from './whisperOutput';
+import { execWithHardTimeout } from './processExec';
 
 // Simple data interface for transcription modal display
 interface TranscriptionModalData {
@@ -144,7 +145,7 @@ export class TranscriptionService {
 				try {
 					this.debugLog(`Trying transcription approach ${approach.name}`);
 
-					const { stdout, stderr } = await this.execWithHardTimeout(
+					const { stdout, stderr } = await execWithHardTimeout(
 						childProcess,
 						approach.command,
 						env,
@@ -323,59 +324,6 @@ export class TranscriptionService {
 		return '';
 	}
 
-	// child_process.exec with a timeout that always settles. Node's built-in
-	// exec timeout only signals the shell; the script's children (yt-dlp,
-	// python) survive, keep the stdio pipes open, and the promise never
-	// resolves — which left the transcription modal stuck forever. Running the
-	// child in its own process group and SIGKILLing the group guarantees both
-	// cleanup and settlement.
-	private execWithHardTimeout(
-		childProcess: typeof import('child_process'),
-		command: string,
-		env: Record<string, string | undefined>,
-		timeoutMs: number
-	): Promise<{ stdout: string; stderr: string }> {
-		return new Promise((resolve, reject) => {
-			let settled = false;
-
-			// detached puts the shell in its own process group so the whole
-			// pipeline can be killed; exec forwards it to spawn at runtime
-			// even though ExecOptions does not declare it
-			const options = { maxBuffer: 1024 * 1024, env, detached: true } as import('child_process').ExecOptions;
-			const child = childProcess.exec(
-				command,
-				options,
-				(error: Error | null, stdout: string | Buffer, stderr: string | Buffer) => {
-					if (settled) return;
-					settled = true;
-					window.clearTimeout(timer);
-					if (error) {
-						reject(error);
-					} else {
-						resolve({ stdout: String(stdout), stderr: String(stderr) });
-					}
-				}
-			);
-
-			const timer = window.setTimeout(() => {
-				if (settled) return;
-				settled = true;
-				try {
-					if (child.pid) {
-						process.kill(-child.pid, 'SIGKILL');
-					} else {
-						child.kill('SIGKILL');
-					}
-				} catch {
-					child.kill('SIGKILL');
-				}
-				const timeoutError = new Error(`Transcription timed out after ${Math.round(timeoutMs / 1000)}s`) as Error & { code: string };
-				timeoutError.code = 'ETIMEDOUT';
-				reject(timeoutError);
-			}, timeoutMs);
-		});
-	}
-
 	private async getWhisperLocalTranscription(url: string, videoId: string | null, isBulkProcessing = false): Promise<string> {
 		if (Platform.isMobile) {
 			if (!isBulkProcessing) {
@@ -480,7 +428,7 @@ export class TranscriptionService {
 
 					this.debugLog(`Trying transcription with ${browser}:`, command);
 
-					const { stdout, stderr } = await this.execWithHardTimeout(childProcess, command, env, transcriptionTimeout);
+					const { stdout, stderr } = await execWithHardTimeout(childProcess, command, env, transcriptionTimeout);
 
 					if (stderr) {
 						this.debugLog(`Whisper stderr (${browser}):`, stderr);
