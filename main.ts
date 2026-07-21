@@ -2,6 +2,20 @@ import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Set
 import { TranscriptionService, TranscriptionSettings } from './src/transcription';
 import { ScriptInstaller } from './src/scriptInstaller';
 import { ScriptInstallationModal } from './src/scriptInstallationModal';
+import {
+	appendQuickNote,
+	applySectionEdit,
+	buildDataviewQuery,
+	extractEmbed,
+	extractSectionBody,
+	hasTag,
+	matchesStatusFilters,
+	normalizeTags,
+	pruneStaleSessions,
+	sortQueue,
+	toQueueNoteMeta,
+	SYSTEM_TAGS
+} from './src/reviewQueue';
 
 const VIEW_TYPE_TIKTOK_REVIEW = 'tiktok-review-view';
 
@@ -425,6 +439,27 @@ export default class TikTokerPlugin extends Plugin {
 		);
 
 		this.addSettingTab(new TikTokerSettingTab(this.app, this));
+
+		this.cleanupStaleReviewSessions();
+	}
+
+	// "Session cleanup days" setting: drop sessions not accessed within the
+	// configured window, but never the currently active one.
+	cleanupStaleReviewSessions() {
+		if (!this.settings.reviewQueueEnableSessionManagement) return;
+
+		const protectedIds = this.settings.activeSessionId ? [this.settings.activeSessionId] : [];
+		const result = pruneStaleSessions(
+			this.settings.reviewSessions,
+			this.settings.reviewQueueSessionCleanupDays,
+			new Date(),
+			protectedIds
+		);
+
+		if (result.removed.length > 0) {
+			this.settings.reviewSessions = result.kept;
+			void this.saveSettings();
+		}
 	}
 
 	async activateReviewView() {
@@ -3733,7 +3768,6 @@ class TikTokReviewView extends ItemView {
 	plugin: TikTokerPlugin;
 	queue: TFile[] = [];
 	currentIndex = 0;
-	filterMode: 'unwatched' | 'review_again' | 'watched' = 'unwatched';
 	// Combined filters
 	filterStarred = false;
 	filterUnwatched = true;
@@ -4000,9 +4034,28 @@ class TikTokReviewView extends ItemView {
 
 		this.createControls();
 
+		// Restore the previously active session (filters and reviewed tracking),
+		// not just the dropdown selection
+		this.restoreActiveSession();
+
 		// Load and render first TikTok
 		await this.loadQueue();
 		await this.renderCurrentTikTok();
+	}
+
+	restoreActiveSession() {
+		const sessionId = this.plugin.settings.activeSessionId;
+		if (!sessionId) return;
+
+		const session = this.plugin.settings.reviewSessions.find(s => s.id === sessionId);
+		if (!session) return;
+
+		this.activeSession = session;
+		this.hashtagFilter = session.hashtagFilter;
+		this.textFilter = session.textFilter;
+		this.hashtagFilterInput.value = session.hashtagFilter;
+		this.textFilterInput.value = session.textFilter;
+		this.updateSessionDropdown();
 	}
 
 	createControls() {
@@ -4082,11 +4135,8 @@ class TikTokReviewView extends ItemView {
 
 		const currentFile = this.queue[this.currentIndex];
 		const cache = this.app.metadataCache.getFileCache(currentFile);
-		const tags = cache?.frontmatter?.tags || [];
-		const tagArray = Array.isArray(tags) ? tags : [tags];
-
-		const isWatched = tagArray.some((t: string) => t === 'watched' || t === '#watched');
-		const isStarred = tagArray.some((t: string) => t === 'star' || t === '#star');
+		const isWatched = hasTag(cache?.frontmatter?.tags, 'watched');
+		const isStarred = hasTag(cache?.frontmatter?.tags, 'star');
 
 		const transitionClass = this.plugin.settings.reviewQueueEnableTransitions ? 'with-transition' : '';
 
@@ -4120,41 +4170,16 @@ class TikTokReviewView extends ItemView {
 		const allFiles = this.app.vault.getMarkdownFiles()
 			.filter(file => file.path.startsWith(tiktokFolder + '/'));
 
-		// Combined filter logic (OR between status filters)
-		this.queue = [];
-		for (const file of allFiles) {
-			const cache = this.app.metadataCache.getFileCache(file);
-			const tags = cache?.frontmatter?.tags || [];
-			const tagArray = Array.isArray(tags) ? tags : [tags];
-
-			const hasWatched = tagArray.some((t: string) => t === 'watched' || t === '#watched');
-			const hasSkip = tagArray.some((t: string) => t === 'skip' || t === '#skip');
-			const hasReviewAgain = tagArray.some((t: string) => t === 'review_again' || t === '#review_again');
-			const hasStarred = tagArray.some((t: string) => t === 'star' || t === '#star');
-
-			// Skip files with 'skip' tag
-			if (hasSkip) continue;
-
-			// OR logic for status filters (at least one must be checked and match)
-			let matchesStatus = false;
-			if (this.filterUnwatched && !hasWatched) matchesStatus = true;
-			if (this.filterWatched && hasWatched) matchesStatus = true;
-			if (this.filterReviewAgain && hasReviewAgain) matchesStatus = true;
-
-			// If no status filters are checked, show nothing
-			if (!this.filterUnwatched && !this.filterWatched && !this.filterReviewAgain) {
-				matchesStatus = false;
-			}
-
-			// AND logic for starred filter
-			if (this.filterStarred && !hasStarred) {
-				matchesStatus = false;
-			}
-
-			if (matchesStatus) {
-				this.queue.push(file);
-			}
-		}
+		// Combined filter logic (OR between status filters, starred ANDs)
+		this.queue = allFiles.filter(file => {
+			const meta = toQueueNoteMeta(file.path, this.app.metadataCache.getFileCache(file)?.frontmatter);
+			return matchesStatusFilters(meta.tags, {
+				unwatched: this.filterUnwatched,
+				watched: this.filterWatched,
+				reviewAgain: this.filterReviewAgain,
+				starred: this.filterStarred
+			});
+		});
 
 		// Apply content/hashtag filters if active
 		if (this.hashtagFilter || this.textFilter) {
@@ -4180,64 +4205,17 @@ class TikTokReviewView extends ItemView {
 			}
 		}
 
-		// Sort queue based on sortMode
-		if (this.sortMode === 'created-desc') {
-			this.queue.sort((a, b) => {
-				const aCache = this.app.metadataCache.getFileCache(a);
-				const bCache = this.app.metadataCache.getFileCache(b);
-				const aDate = aCache?.frontmatter?.created || '';
-				const bDate = bCache?.frontmatter?.created || '';
-				return bDate.localeCompare(aDate);
-			});
-		} else if (this.sortMode === 'created-asc') {
-			this.queue.sort((a, b) => {
-				const aCache = this.app.metadataCache.getFileCache(a);
-				const bCache = this.app.metadataCache.getFileCache(b);
-				const aDate = aCache?.frontmatter?.created || '';
-				const bDate = bCache?.frontmatter?.created || '';
-				return aDate.localeCompare(bDate);
-			});
-		} else if (this.sortMode === 'author') {
-			this.queue.sort((a, b) => {
-				const aCache = this.app.metadataCache.getFileCache(a);
-				const bCache = this.app.metadataCache.getFileCache(b);
-				const aAuthor = aCache?.frontmatter?.author || '';
-				const bAuthor = bCache?.frontmatter?.author || '';
-				return aAuthor.localeCompare(bAuthor);
-			});
-		} else if (this.sortMode === 'hashtags') {
-			this.queue.sort((a, b) => {
-				const aCache = this.app.metadataCache.getFileCache(a);
-				const bCache = this.app.metadataCache.getFileCache(b);
-				const aTags = aCache?.frontmatter?.tags || [];
-				const bTags = bCache?.frontmatter?.tags || [];
-				const aTagArray = Array.isArray(aTags) ? aTags : [aTags];
-				const bTagArray = Array.isArray(bTags) ? bTags : [bTags];
-				// Sort by first content hashtag (excluding system tags)
-				const systemTags = ['tiktoker', 'unreviewed_tiktok', 'watched', 'star', 'review_again', 'skip'];
-				const aHashtag = aTagArray.find((t: string) => !systemTags.includes(t.replace('#', ''))) || '';
-				const bHashtag = bTagArray.find((t: string) => !systemTags.includes(t.replace('#', ''))) || '';
-				return aHashtag.localeCompare(bHashtag);
-			});
-		}
-
-		// Priority mode: starred items come first
-		if (this.plugin.settings.reviewQueuePriorityMode) {
-			this.queue.sort((a, b) => {
-				const aCache = this.app.metadataCache.getFileCache(a);
-				const bCache = this.app.metadataCache.getFileCache(b);
-				const aTags = aCache?.frontmatter?.tags || [];
-				const bTags = bCache?.frontmatter?.tags || [];
-				const aTagArray = Array.isArray(aTags) ? aTags : [aTags];
-				const bTagArray = Array.isArray(bTags) ? bTags : [bTags];
-				const aStarred = aTagArray.some((t: string) => t === 'star' || t === '#star');
-				const bStarred = bTagArray.some((t: string) => t === 'star' || t === '#star');
-
-				if (aStarred && !bStarred) return -1;
-				if (!aStarred && bStarred) return 1;
-				return 0;
-			});
-		}
+		// Sort queue based on sortMode; priority mode floats starred notes first.
+		// Metadata is coerced to strings so numeric frontmatter (e.g. a #1111
+		// hashtag YAML-parsed as an int) cannot crash the comparators.
+		const fileByPath = new Map(this.queue.map(file => [file.path, file]));
+		const metas = this.queue.map(file =>
+			toQueueNoteMeta(file.path, this.app.metadataCache.getFileCache(file)?.frontmatter)
+		);
+		const sortedMetas = sortQueue(metas, this.sortMode, this.plugin.settings.reviewQueuePriorityMode);
+		this.queue = sortedMetas
+			.map(meta => fileByPath.get(meta.path))
+			.filter((file): file is TFile => file !== undefined);
 
 		// Reset index if queue changed
 		if (this.currentIndex >= this.queue.length) {
@@ -4261,30 +4239,41 @@ class TikTokReviewView extends ItemView {
 		const currentFile = this.queue[this.currentIndex];
 		const content = await this.app.vault.cachedRead(currentFile);
 
-		// Extract iframe from content - support both iframe and blockquote formats
-		let iframeMatch = content.match(/<iframe[^>]*src="https:\/\/www\.tiktok\.com\/embed\/v2\/[^"]*"[^>]*><\/iframe>/);
-
-		// Fallback to blockquote format
-		if (!iframeMatch) {
-			iframeMatch = content.match(/<blockquote[^>]*class="tiktok-embed"[^>]*>[\s\S]*?<\/blockquote>\s*<script[^>]*src="https:\/\/www\.tiktok\.com\/embed\.js"[^>]*><\/script>/);
-		}
+		// Support all embed formats: iframe, blockquote, markdown (photo
+		// slideshows), and private-video links
+		const embed = extractEmbed(content);
 
 		this.embedDiv.empty();
-		if (iframeMatch) {
+		if (embed?.kind === 'iframe' || embed?.kind === 'blockquote') {
 			// Parse and insert embed HTML using DOM parser for safety
 			const parser = new DOMParser();
-			const doc = parser.parseFromString(iframeMatch[0], 'text/html');
+			const doc = parser.parseFromString(embed.html, 'text/html');
 			const embedContent = doc.body.firstChild;
 			if (embedContent) {
 				this.embedDiv.appendChild(document.importNode(embedContent, true));
 			}
 			// For blockquote embeds, reload TikTok embed script
-			if (iframeMatch[0].includes('blockquote')) {
+			if (embed.kind === 'blockquote') {
 				const script = document.createElement('script');
 				script.src = 'https://www.tiktok.com/embed.js';
 				script.async = true;
 				this.embedDiv.appendChild(script);
 			}
+		} else if (embed?.kind === 'markdown') {
+			// Photo slideshows and markdown-style embeds: render as markdown
+			const markdownDiv = this.embedDiv.createDiv({ cls: 'tiktoker-review-markdown-embed' });
+			await MarkdownRenderer.render(this.app, embed.markdown, markdownDiv, currentFile.path, this);
+			const openLink = this.embedDiv.createEl('a', {
+				text: 'Open on tiktok',
+				href: embed.url,
+				cls: 'tiktoker-review-embed-link'
+			});
+			openLink.setAttr('target', '_blank');
+		} else if (embed?.kind === 'private') {
+			const privateDiv = this.embedDiv.createDiv({ cls: 'tiktoker-review-private-embed' });
+			privateDiv.createSpan({ text: 'Private video: ' });
+			const link = privateDiv.createEl('a', { text: embed.url, href: embed.url });
+			link.setAttr('target', '_blank');
 		} else {
 			this.embedDiv.createDiv({ text: 'Tiktok embed not found in note' });
 		}
@@ -4297,32 +4286,21 @@ class TikTokReviewView extends ItemView {
 			cls: 'tiktoker-review-title'
 		});
 
-		// Show hashtags
+		// Show hashtags (content hashtags only, not system tags)
 		this.hashtagsDiv.empty();
-		if (cache?.frontmatter?.tags) {
-			const tags = Array.isArray(cache.frontmatter.tags) ? cache.frontmatter.tags : [cache.frontmatter.tags];
-			// Filter to show only content hashtags (not system tags like tiktoker, unreviewed_tiktok, watched, etc.)
-			const systemTags = ['tiktoker', 'unreviewed_tiktok', 'watched', 'star', 'review_again', 'skip'];
-			const contentHashtags = tags.filter((tag: string) => {
-				const cleanTag = tag.replace('#', '');
-				return !systemTags.includes(cleanTag);
+		const contentHashtags = normalizeTags(cache?.frontmatter?.tags)
+			.filter(tag => !SYSTEM_TAGS.includes(tag));
+		contentHashtags.forEach(cleanTag => {
+			const hashtagEl = this.hashtagsDiv.createEl('span', {
+				text: `#${cleanTag}`,
+				cls: 'tiktoker-review-hashtag'
 			});
-
-			if (contentHashtags.length > 0) {
-				contentHashtags.forEach((tag: string) => {
-					const cleanTag = tag.replace('#', '');
-					const hashtagEl = this.hashtagsDiv.createEl('span', {
-						text: `#${cleanTag}`,
-						cls: 'tiktoker-review-hashtag'
-					});
-					hashtagEl.addEventListener('click', () => {
-						// Open tag search in left sidebar
-						// @ts-expect-error - internalPlugins is internal Obsidian API
-						this.app.internalPlugins.plugins['global-search'].instance.openGlobalSearch(`tag:#${cleanTag}`);
-					});
-				});
-			}
-		}
+			hashtagEl.addEventListener('click', () => {
+				// Open tag search in left sidebar
+				// @ts-expect-error - internalPlugins is internal Obsidian API
+				this.app.internalPlugins?.plugins?.['global-search']?.instance?.openGlobalSearch?.(`tag:#${cleanTag}`);
+			});
+		});
 
 		// Update button states and counter
 		this.updateButtonStates();
@@ -4359,12 +4337,12 @@ class TikTokReviewView extends ItemView {
 		displayContent = displayContent.replace(/<blockquote[^>]*class="tiktok-embed"[\s\S]*?<\/script>/, '');
 
 		// Extract just Description and Transcription sections if they exist
-		const descMatch = displayContent.match(/## Description\s*([\s\S]*?)(?=##|$)/);
-		const transMatch = displayContent.match(/## Transcription\s*([\s\S]*?)(?=##|$)/);
+		const descBody = extractSectionBody(displayContent, 'Description');
+		const transBody = extractSectionBody(displayContent, 'Transcription');
 
 		let focusedContent = '';
-		if (descMatch) focusedContent += '## Description\n' + descMatch[1].trim() + '\n\n';
-		if (transMatch) focusedContent += '## Transcription\n' + transMatch[1].trim();
+		if (descBody !== null) focusedContent += '## Description\n' + descBody + '\n\n';
+		if (transBody !== null) focusedContent += '## Transcription\n' + transBody;
 
 		const contentToRender = focusedContent.trim() || displayContent.trim();
 
@@ -4384,26 +4362,19 @@ class TikTokReviewView extends ItemView {
 				const newContent = textarea.value;
 
 				void this.app.vault.process(currentFile, (data) => {
+					// Line-aware section replacement: only the edited section's
+					// own body is touched, so embeds and other sections are
+					// preserved byte-for-byte
 					let updatedContent = data;
 
-					if (/## Description/.test(data) && newContent.includes('## Description')) {
-						const newDescMatch = newContent.match(/## Description\s*([\s\S]*?)(?=##|$)/);
-						if (newDescMatch) {
-							updatedContent = updatedContent.replace(
-								/## Description[\s\S]*?(?=##|$)/,
-								`## Description\n${newDescMatch[1].trim()}\n\n`
-							);
-						}
+					const newDescBody = extractSectionBody(newContent, 'Description');
+					if (newDescBody !== null) {
+						updatedContent = applySectionEdit(updatedContent, 'Description', newDescBody);
 					}
 
-					if (/## Transcription/.test(data) && newContent.includes('## Transcription')) {
-						const newTransMatch = newContent.match(/## Transcription\s*([\s\S]*?)(?=##|$)/);
-						if (newTransMatch) {
-							updatedContent = updatedContent.replace(
-								/## Transcription[\s\S]*?(?=##|$)/,
-								`## Transcription\n${newTransMatch[1].trim()}`
-							);
-						}
+					const newTransBody = extractSectionBody(newContent, 'Transcription');
+					if (newTransBody !== null) {
+						updatedContent = applySectionEdit(updatedContent, 'Transcription', newTransBody);
 					}
 
 					return updatedContent;
@@ -4445,9 +4416,7 @@ class TikTokReviewView extends ItemView {
 
 		const currentFile = this.queue[this.currentIndex];
 		const cache = this.app.metadataCache.getFileCache(currentFile);
-		const tags = cache?.frontmatter?.tags || [];
-		const tagArray = Array.isArray(tags) ? tags : [tags];
-		const isWatched = tagArray.some((t: string) => t === 'watched' || t === '#watched');
+		const isWatched = hasTag(cache?.frontmatter?.tags, 'watched');
 
 		if (isWatched) {
 			// Unwatch: remove watched, add unreviewed_tiktok
@@ -4468,9 +4437,7 @@ class TikTokReviewView extends ItemView {
 
 		const currentFile = this.queue[this.currentIndex];
 		const cache = this.app.metadataCache.getFileCache(currentFile);
-		const tags = cache?.frontmatter?.tags || [];
-		const tagArray = Array.isArray(tags) ? tags : [tags];
-		const isStarred = tagArray.some((t: string) => t === 'star' || t === '#star');
+		const isStarred = hasTag(cache?.frontmatter?.tags, 'star');
 
 		if (isStarred) {
 			// Unstar
@@ -4487,12 +4454,14 @@ class TikTokReviewView extends ItemView {
 	}
 
 	async markAsReviewAgain() {
+		if (this.queue.length === 0) return;
 		await this.updateTags(['review_again'], ['unreviewed_tiktok', 'watched'], true);
 		new Notice('Marked for review again');
 		await this.moveToNext();
 	}
 
 	async markAsSkip() {
+		if (this.queue.length === 0) return;
 		await this.updateTags(['skip'], [], false);
 		new Notice('Skipped');
 		await this.moveToNext();
@@ -4509,16 +4478,7 @@ class TikTokReviewView extends ItemView {
 
 		const currentFile = this.queue[this.currentIndex];
 
-		await this.app.vault.process(currentFile, (data) => {
-			if (data.includes('## Notes')) {
-				return data.replace(
-					/(## Notes[\s\S]*?)(?=\n##|$)/,
-					`$1\n- ${noteText}`
-				);
-			} else {
-				return data + `\n\n## Notes\n- ${noteText}`;
-			}
-		});
+		await this.app.vault.process(currentFile, (data) => appendQuickNote(data, noteText));
 		this.quickNotesTextarea.value = '';
 		new Notice('Note added');
 	}
@@ -4537,22 +4497,14 @@ class TikTokReviewView extends ItemView {
 
 		// Use Obsidian's processFrontMatter API for proper metadata handling
 		await this.app.fileManager.processFrontMatter(currentFile, (frontmatter) => {
-			// Handle tags
-			let tags = frontmatter.tags || [];
-			if (!Array.isArray(tags)) {
-				tags = [tags];
-			}
+			// Normalize (coerces numeric tags, strips # prefixes), then apply
+			// removals and additions
+			let tags = normalizeTags(frontmatter.tags);
+			tags = tags.filter(t => !tagsToRemove.includes(t));
 
-			// Remove tags (handle both with and without # prefix)
-			tags = tags.filter((t: string) => {
-				const cleanTag = t.replace('#', '');
-				return !tagsToRemove.includes(cleanTag) && !tagsToRemove.includes(t);
-			});
-
-			// Add tags (without # prefix for consistency)
 			tagsToAdd.forEach(tag => {
 				const cleanTag = tag.replace('#', '');
-				if (!tags.includes(cleanTag) && !tags.includes(`#${cleanTag}`)) {
+				if (!tags.includes(cleanTag)) {
 					tags.push(cleanTag);
 				}
 			});
@@ -4650,11 +4602,8 @@ class TikTokReviewView extends ItemView {
 			fileContent = await this.app.vault.cachedRead(file);
 
 			// Extract Description and Transcription sections
-			const descMatch = fileContent.match(/## Description\s*([\s\S]*?)(?=##|$)/);
-			const transMatch = fileContent.match(/## Transcription\s*([\s\S]*?)(?=##|$)/);
-
-			descriptionText = descMatch ? descMatch[1].trim() : '';
-			transcriptionText = transMatch ? transMatch[1].trim() : '';
+			descriptionText = extractSectionBody(fileContent, 'Description') || '';
+			transcriptionText = extractSectionBody(fileContent, 'Transcription') || '';
 		} catch (e) {
 			// If we can't read the file, handle gracefully
 			console.error(`Error reading file ${file.path}:`, e);
@@ -4908,41 +4857,26 @@ class TikTokReviewView extends ItemView {
 
 		// Build dataview query based on active filters
 		const outputFolder = this.plugin.settings.outputFolder || 'Tiktoks';
-		let whereClause = '';
-		let titleText = '';
+		const result = buildDataviewQuery(
+			this.plugin.settings.reviewQueueDataviewTemplate,
+			outputFolder,
+			this.hashtagFilter,
+			this.textFilter
+		);
 
-		if (this.hashtagFilter && this.textFilter) {
-			// Both filters active
-			whereClause = `WHERE contains(file.tags, "#${this.hashtagFilter}")`;
-			titleText = `#${this.hashtagFilter} & text:"${this.textFilter}"`;
-		} else if (this.hashtagFilter) {
-			// Only hashtag filter
-			whereClause = `WHERE contains(file.tags, "#${this.hashtagFilter}")`;
-			titleText = `#${this.hashtagFilter}`;
-		} else if (this.textFilter) {
-			// Only text filter
-			whereClause = `WHERE contains(file.name, "${this.textFilter}") OR contains(file.text, "${this.textFilter}")`;
-			titleText = `text:"${this.textFilter}"`;
-		} else {
-			// No filters
+		if (!result) {
 			new Notice('No active filters to create dataview query');
 			return;
 		}
 
-		const dataviewQuery = `\`\`\`dataview
-${this.plugin.settings.reviewQueueDataviewTemplate}
-FROM "${outputFolder}"
-${whereClause}
-\`\`\``;
-
-		const heading = `## Linked tiktoks: ${titleText}`;
-		const contentToInsert = `\n\n${heading}\n\n${dataviewQuery}\n`;
+		const heading = `## Linked tiktoks: ${result.title}`;
+		const contentToInsert = `\n\n${heading}\n\n${result.query}\n`;
 
 		try {
 			// Append to end using atomic process operation
 			await this.app.vault.process(activeFile, (data) => data + contentToInsert);
 
-			new Notice(`dataview query added to ${activeFile.basename}`);
+			new Notice(`Dataview query added to ${activeFile.basename}`);
 		} catch (error) {
 			console.error('Failed to insert dataview:', error);
 			new Notice('Failed to insert dataview query');
@@ -4977,7 +4911,12 @@ ${whereClause}
 	}
 
 	async onClose() {
-		// Cleanup
+		// Cancel any pending debounced filter reload so it cannot fire
+		// against a closed view
+		if (this.filterTimeout) {
+			window.clearTimeout(this.filterTimeout);
+			this.filterTimeout = null;
+		}
 	}
 }
 

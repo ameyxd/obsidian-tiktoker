@@ -109,23 +109,58 @@ def ensure_venv():
             check=True
         )
 
+    # TikTok now requires yt-dlp browser impersonation (curl_cffi). Keep a
+    # self-contained yt-dlp in the venv so impersonation always works.
+    result = subprocess.run(
+        [str(python_exe), "-c", "import yt_dlp, curl_cffi"],
+        capture_output=True,
+        check=False
+    )
+
+    if result.returncode != 0:
+        print("Installing yt-dlp with impersonation support...", file=sys.stderr)
+        subprocess.run(
+            [str(python_exe), "-m", "pip", "install", "-q", "-U", "yt-dlp[default]", "curl_cffi"],
+            check=False
+        )
+
+
+def get_ytdlp_command():
+    """Prefer the venv yt-dlp (has curl_cffi impersonation), fall back to system yt-dlp."""
+    python_exe = get_python_executable()
+    result = subprocess.run(
+        [str(python_exe), "-c", "import yt_dlp, curl_cffi"],
+        capture_output=True,
+        check=False
+    )
+    if result.returncode == 0:
+        return [str(python_exe), "-m", "yt_dlp"], True
+    return ["yt-dlp"], False
+
 
 def download_audio(url, browser, workdir):
     """Download audio from TikTok URL using yt-dlp."""
     user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"
     referer = "https://www.tiktok.com/"
 
-    cmd = [
-        "yt-dlp",
+    ytdlp_cmd, can_impersonate = get_ytdlp_command()
+
+    cmd = ytdlp_cmd + [
         url,
         "--extract-audio",
         "--audio-format", "wav",
         "--audio-quality", "0",
         "--no-playlist",
+        # TikTok's bytevc1 (h265) formats often lack the audio track despite
+        # claiming aac, so prefer h264 formats, then audio-only, then rest
+        "-f", "b[vcodec^=h264]/ba/b",
         "--user-agent", user_agent,
         "--referer", referer,
         "-o", "%(id)s.%(ext)s"
     ]
+
+    if can_impersonate:
+        cmd.extend(["--impersonate", "chrome"])
 
     # Add browser cookies if specified
     if browser:

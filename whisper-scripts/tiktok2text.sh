@@ -35,35 +35,14 @@ OUTDIR="${OUTDIR:-$SCRIPT_DIR}"
 mkdir -p "$OUTDIR"
 
 # Dependencies
-for cmd in yt-dlp ffmpeg python3; do
+for cmd in ffmpeg python3; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Missing dependency: $cmd  (on macOS: brew install $cmd)" >&2
     exit 2
   fi
 done
 
-# Temp work area for downloads (auto-cleaned)
-WORKDIR="$(mktemp -d -t tiktok2text.XXXXXX)"
-trap 'rm -rf "$WORKDIR"' EXIT
-cd "$WORKDIR"
-
-UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"
-REF="https://www.tiktok.com/"
-
-# 1) Grab best audio as WAV (kept in temp)
-yt-dlp "$URL" --extract-audio --audio-format wav --audio-quality 0 --no-playlist \
-  --user-agent "$UA" --referer "$REF" --cookies-from-browser "$BROWSER" \
-  -o "%(id)s.%(ext)s"
-
-WAV="$(ls -1 *.wav 2>/dev/null | head -n1 || true)"
-if [ ! -f "${WAV:-}" ]; then
-  echo "Failed to fetch audio. Try: -b chrome, ensure you're logged in, or open the URL once in your browser." >&2
-  exit 3
-fi
-BASENAME="${WAV%.wav}"
-OUTTXT="$OUTDIR/$BASENAME.txt"
-
-# 2) Reusable venv & cached model kept NEXT TO THE SCRIPT
+# Reusable venv & cached model kept NEXT TO THE SCRIPT
 VENV="$SCRIPT_DIR/.tiktok2text-venv"
 MODELDIR="$SCRIPT_DIR/.models"
 mkdir -p "$MODELDIR"
@@ -81,6 +60,56 @@ PY
 then
   "$VENV/bin/python" -m pip install -q faster-whisper
 fi
+
+# TikTok now requires yt-dlp browser impersonation (curl_cffi). Keep a
+# self-contained yt-dlp in the venv so impersonation always works, regardless
+# of how the system yt-dlp was installed.
+if ! "$VENV/bin/python" - >/dev/null 2>&1 <<'PY'
+import importlib.util, sys
+ok = importlib.util.find_spec("yt_dlp") and importlib.util.find_spec("curl_cffi")
+sys.exit(0 if ok else 1)
+PY
+then
+  "$VENV/bin/python" -m pip install -q -U "yt-dlp[default]" curl_cffi >&2 || true
+fi
+
+YTDLP="yt-dlp"
+IMPERSONATE=""
+if [ -x "$VENV/bin/yt-dlp" ]; then
+  YTDLP="$VENV/bin/yt-dlp"
+  IMPERSONATE="--impersonate chrome"
+elif ! command -v yt-dlp >/dev/null 2>&1; then
+  echo "Missing dependency: yt-dlp  (on macOS: brew install yt-dlp)" >&2
+  exit 2
+fi
+
+# Temp work area for downloads (auto-cleaned)
+WORKDIR="$(mktemp -d -t tiktok2text.XXXXXX)"
+trap 'rm -rf "$WORKDIR"' EXIT
+cd "$WORKDIR"
+
+UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"
+REF="https://www.tiktok.com/"
+
+# 1) Grab best audio as WAV (kept in temp)
+# TikTok's bytevc1 (h265) formats often lack the audio track despite claiming
+# aac, so prefer h264 formats, then audio-only, then whatever is left.
+FORMAT="b[vcodec^=h264]/ba/b"
+
+# shellcheck disable=SC2086  # IMPERSONATE intentionally word-splits into flag + value
+"$YTDLP" "$URL" --extract-audio --audio-format wav --audio-quality 0 --no-playlist \
+  -f "$FORMAT" \
+  --user-agent "$UA" --referer "$REF" --cookies-from-browser "$BROWSER" \
+  $IMPERSONATE \
+  -o "%(id)s.%(ext)s"
+
+WAV="$(ls -1 *.wav 2>/dev/null | head -n1 || true)"
+if [ ! -f "${WAV:-}" ]; then
+  echo "Failed to fetch audio. Try: -b chrome, ensure you're logged in, or open the URL once in your browser." >&2
+  exit 3
+fi
+BASENAME="${WAV%.wav}"
+OUTTXT="$OUTDIR/$BASENAME.txt"
 
 # 3) Transcribe -> print to stdout, save to OUTTXT (same folder as script)
 "$VENV/bin/python" - "$WORKDIR/$WAV" "$MODEL" "$COMPUTE_TYPE" "$LANG" "$OUTTXT" "$MODELDIR" <<'PY'

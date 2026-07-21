@@ -1234,6 +1234,20 @@ If your plugin does not need CSS, delete this file.
 	pointer-events: auto;
 }
 
+/* Transcription status card never blocks the workspace: no backdrop, clicks
+   pass through everywhere except the card itself */
+.tiktoker-modal-nonblocking {
+	pointer-events: none;
+}
+
+.tiktoker-modal-nonblocking .modal-bg {
+	display: none;
+}
+
+.tiktoker-modal-nonblocking .modal {
+	pointer-events: auto;
+}
+
 .tiktoker-modal-fixed-bottom-right {
 	position: fixed !important;
 	bottom: 20px !important;
