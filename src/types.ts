@@ -127,7 +127,7 @@ export interface TikTokerSettings {
 	transcriptionApi: 'none' | 'whisper-local' | 'assemblyai';
 	whisperScriptPath: string;
 	whisperModel: 'tiny' | 'base' | 'small' | 'medium' | 'large';
-	whisperBrowser: 'chrome' | 'safari';
+	whisperBrowser: 'chrome' | 'safari' | 'edge' | 'firefox';
 	apiKey: string;
 	handlePrivateVideos: 'create-empty' | 'skip' | 'show-error';
 	duplicateFileHandling: 'replace' | 'duplicate' | 'skip';

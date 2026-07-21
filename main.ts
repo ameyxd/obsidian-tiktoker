@@ -148,7 +148,7 @@ interface TikTokerSettings {
 	transcriptionApi: 'none' | 'whisper-local' | 'assemblyai';
 	whisperScriptPath: string;
 	whisperModel: 'tiny' | 'base' | 'small' | 'medium' | 'large';
-	whisperBrowser: 'chrome' | 'safari';
+	whisperBrowser: 'chrome' | 'safari' | 'edge' | 'firefox';
 	apiKey: string;
 	handlePrivateVideos: 'create-empty' | 'skip' | 'show-error';
 	duplicateFileHandling: 'replace' | 'duplicate' | 'skip';
@@ -2881,14 +2881,22 @@ class TikTokerSettingTab extends PluginSettingTab {
 			new Setting(modelSection)
 				.setName('Browser for cookies')
 				.setDesc('Which browser to use for cookie extraction')
-				.addDropdown(dropdown => dropdown
-					.addOption('chrome', 'Chrome')
-					.addOption('safari', 'Safari')
-					.setValue(this.plugin.settings.whisperBrowser)
-					.onChange(async (value: string) => {
-						this.plugin.settings.whisperBrowser = value as 'chrome' | 'safari';
-						await this.plugin.saveSettings();
-					}));
+				.addDropdown(dropdown => {
+					// Safari cookies only exist on macOS; Windows gets Edge instead
+					dropdown.addOption('chrome', 'Chrome');
+					if (Platform.isWin) {
+						dropdown.addOption('edge', 'Edge');
+					} else {
+						dropdown.addOption('safari', 'Safari');
+					}
+					dropdown.addOption('firefox', 'Firefox');
+					dropdown
+						.setValue(this.plugin.settings.whisperBrowser)
+						.onChange(async (value: string) => {
+							this.plugin.settings.whisperBrowser = value as TikTokerSettings['whisperBrowser'];
+							await this.plugin.saveSettings();
+						});
+				});
 
 			const testSection = this.createCollapsibleSection(container, 'Setup & testing');
 
