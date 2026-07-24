@@ -2683,7 +2683,6 @@ class TikTokerSettingTab extends PluginSettingTab {
 			.addSlider(slider => slider
 				.setLimits(5, 30, 1)
 				.setValue(this.plugin.settings.urlTimeout)
-				.setDynamicTooltip()
 				.onChange(async (value) => {
 					this.plugin.settings.urlTimeout = value;
 					await this.plugin.saveSettings();
@@ -2980,7 +2979,6 @@ class TikTokerSettingTab extends PluginSettingTab {
 				.addSlider(slider => slider
 					.setLimits(50, 1000, 50)
 					.setValue(this.plugin.settings.globalCacheMaxSizeMB)
-					.setDynamicTooltip()
 					.onChange(async (value) => {
 						this.plugin.settings.globalCacheMaxSizeMB = value;
 						await this.plugin.saveSettings();
@@ -2992,7 +2990,6 @@ class TikTokerSettingTab extends PluginSettingTab {
 				.addSlider(slider => slider
 					.setLimits(1, 30, 1)
 					.setValue(this.plugin.settings.autoClearCacheAfterDays)
-					.setDynamicTooltip()
 					.onChange(async (value) => {
 						this.plugin.settings.autoClearCacheAfterDays = value;
 						await this.plugin.saveSettings();
@@ -3068,7 +3065,6 @@ class TikTokerSettingTab extends PluginSettingTab {
 				.addSlider(slider => slider
 					.setLimits(1, 90, 1)
 					.setValue(this.plugin.settings.reviewQueueSessionCleanupDays)
-					.setDynamicTooltip()
 					.onChange(async (value) => {
 						this.plugin.settings.reviewQueueSessionCleanupDays = value;
 						await this.plugin.saveSettings();
@@ -4252,20 +4248,29 @@ class TikTokReviewView extends ItemView {
 		const embed = extractEmbed(content);
 
 		this.embedDiv.empty();
-		if (embed?.kind === 'iframe' || embed?.kind === 'blockquote') {
+		if (embed?.kind === 'iframe' || (embed?.kind === 'blockquote' && embed.videoId)) {
+			// Blockquote embeds are rendered as plain iframes via their video ID
+			// instead of executing TikTok's remote embed.js script
+			const html = embed.kind === 'iframe'
+				? embed.html
+				: `<iframe width="325" height="760" src="https://www.tiktok.com/embed/v2/${embed.videoId}"></iframe>`;
 			// Parse and insert embed HTML using DOM parser for safety
 			const parser = new DOMParser();
-			const doc = parser.parseFromString(embed.html, 'text/html');
+			const doc = parser.parseFromString(html, 'text/html');
 			const embedContent = doc.body.firstChild;
 			if (embedContent) {
 				this.embedDiv.appendChild(document.importNode(embedContent, true));
 			}
-			// For blockquote embeds, reload TikTok embed script
-			if (embed.kind === 'blockquote') {
-				const script = document.createElement('script');
-				script.src = 'https://www.tiktok.com/embed.js';
-				script.async = true;
-				this.embedDiv.appendChild(script);
+		} else if (embed?.kind === 'blockquote') {
+			// No video ID recoverable: link out instead of executing remote script
+			const cite = embed.html.match(/cite="([^"]+)"/);
+			const fallbackDiv = this.embedDiv.createDiv({ cls: 'tiktoker-review-private-embed' });
+			fallbackDiv.createSpan({ text: 'Tiktok embed: ' });
+			if (cite) {
+				const link = fallbackDiv.createEl('a', { text: cite[1], href: cite[1] });
+				link.setAttr('target', '_blank');
+			} else {
+				fallbackDiv.createSpan({ text: 'unable to render (no video ID found in note)' });
 			}
 		} else if (embed?.kind === 'markdown') {
 			// Photo slideshows and markdown-style embeds: render as markdown

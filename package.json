@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-tiktoker",
-	"version": "1.5.61",
+	"version": "1.5.62",
 	"description": "Save, transcribe, and review TikTok videos as Obsidian notes",
 	"main": "main.js",
 	"scripts": {
@@ -12,14 +12,10 @@
 	"keywords": [],
 	"author": "",
 	"license": "MIT",
-	"dependencies": {
-		"jszip": "^3.10.1"
-	},
 	"devDependencies": {
 		"@types/node": "^16.11.6",
 		"@typescript-eslint/eslint-plugin": "5.29.0",
 		"@typescript-eslint/parser": "5.29.0",
-		"builtin-modules": "3.3.0",
 		"esbuild": "0.17.3",
 		"obsidian": "latest",
 		"tslib": "2.4.0",

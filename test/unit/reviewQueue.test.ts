@@ -172,6 +172,20 @@ describe('extractEmbed', () => {
 		expect(embed?.kind === 'iframe' && embed.html).toBe(IFRAME_EMBED);
 	});
 
+	test('finds blockquote embeds and extracts the video ID for iframe rendering', () => {
+		const blockquote = '<blockquote class="tiktok-embed" cite="https://www.tiktok.com/@someuser/video/7123456789012345678" data-video-id="7123456789012345678"><section></section></blockquote> <script async src="https://www.tiktok.com/embed.js"></script>';
+		const embed = extractEmbed(buildNote(blockquote));
+		expect(embed?.kind).toBe('blockquote');
+		expect(embed?.kind === 'blockquote' && embed.videoId).toBe('7123456789012345678');
+	});
+
+	test('blockquote embeds without a video id yield null videoId', () => {
+		const blockquote = '<blockquote class="tiktok-embed"><section></section></blockquote> <script async src="https://www.tiktok.com/embed.js"></script>';
+		const embed = extractEmbed(buildNote(blockquote));
+		expect(embed?.kind).toBe('blockquote');
+		expect(embed?.kind === 'blockquote' && embed.videoId).toBeNull();
+	});
+
 	test('finds markdown slideshow embeds', () => {
 		const embed = extractEmbed(buildNote(MARKDOWN_EMBED));
 		expect(embed?.kind).toBe('markdown');
