@@ -31,3 +31,9 @@ whisper-scripts/.tiktok2text-venv/
 whisper-scripts/*.txt
 whisper-scripts/*.wav
 whisper-scripts/__pycache__/
+
+# Private working files
+.claude*/
+.omc*/
+.serena/
+enhanced-mobile-url-logic-backup.txt

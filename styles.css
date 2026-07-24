@@ -1201,17 +1201,18 @@ If your plugin does not need CSS, delete this file.
 	font-size: 0.8em;
 }
 
-/* Modal positioning classes */
-.tiktoker-modal-fixed-top-right {
-	position: fixed !important;
-	top: 20px !important;
-	right: 20px !important;
-	left: auto !important;
-	bottom: auto !important;
+/* Modal positioning classes: the .modal.tiktoker-* compound selectors outrank
+   Obsidian's own .modal rules by specificity alone */
+.modal.tiktoker-modal-fixed-top-right {
+	position: fixed;
+	top: 20px;
+	right: 20px;
+	left: auto;
+	bottom: auto;
 	width: 320px;
 	max-width: 320px;
 	z-index: 1000;
-	transform: none !important;
+	transform: none;
 	cursor: default;
 }
 
@@ -1248,16 +1249,16 @@ If your plugin does not need CSS, delete this file.
 	pointer-events: auto;
 }
 
-.tiktoker-modal-fixed-bottom-right {
-	position: fixed !important;
-	bottom: 20px !important;
-	right: 20px !important;
-	top: auto !important;
-	left: auto !important;
+.modal.tiktoker-modal-fixed-bottom-right {
+	position: fixed;
+	bottom: 20px;
+	right: 20px;
+	top: auto;
+	left: auto;
 	width: 250px;
 	max-width: 250px;
 	z-index: 1000;
-	transform: none !important;
+	transform: none;
 	cursor: pointer;
 }
 
@@ -1637,6 +1638,7 @@ If your plugin does not need CSS, delete this file.
 }
 
 /* Copy button success state */
+button.tiktoker-copy-success,
 .tiktoker-copy-success {
-	background-color: var(--interactive-success) !important;
+	background-color: var(--interactive-success);
 }

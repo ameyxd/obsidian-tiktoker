@@ -196,6 +196,17 @@ Access plugin settings through Settings → Community Plugins → TikToker:
 - **Integration Features**: Connect with other Obsidian plugins (Calendar, Tags, etc.)
 - **Keyboard Shortcuts**: Hotkeys for quick review queue navigation
 
+## Privacy and system access
+
+TikToker's optional transcription feature runs entirely on your machine, which requires capabilities beyond the vault API. Nothing is sent to third-party services other than TikTok itself (to fetch video metadata and media) and GitHub (to download the transcription scripts).
+
+- **Clipboard access**: "Read tiktok from clipboard" reads your clipboard to find TikTok links. The clipboard is never written to except by the explicit copy buttons.
+- **Shell execution and filesystem access** (desktop only, only when transcription is enabled): the plugin runs the bundled whisper scripts via the system shell to download audio with yt-dlp and transcribe it locally with faster-whisper. The scripts and their Python environment live inside the plugin folder.
+- **Vault file enumeration**: the review queue lists the markdown files inside your configured TikTok folder to build its queue. No other vault files are read.
+- **Network**: TikTok oEmbed/media endpoints for note creation and audio download; raw.githubusercontent.com for installing the transcription scripts. There is no telemetry.
+
+Transcription is opt-in and everything above except clipboard reading can be avoided by leaving transcription disabled.
+
 ## Support
 
 If you find this plugin helpful, consider supporting its development:

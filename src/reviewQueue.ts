@@ -94,7 +94,7 @@ export function sortQueue(notes: QueueNoteMeta[], mode: QueueSortMode, priorityS
 
 export type EmbedInfo =
 	| { kind: 'iframe'; html: string }
-	| { kind: 'blockquote'; html: string }
+	| { kind: 'blockquote'; html: string; videoId: string | null }
 	| { kind: 'markdown'; markdown: string; url: string }
 	| { kind: 'private'; url: string };
 
@@ -103,7 +103,13 @@ export function extractEmbed(content: string): EmbedInfo | null {
 	if (iframe) return { kind: 'iframe', html: iframe[0] };
 
 	const blockquote = content.match(/<blockquote[^>]*class="tiktok-embed"[^>]*>[\s\S]*?<\/blockquote>\s*<script[^>]*src="https:\/\/www\.tiktok\.com\/embed\.js"[^>]*><\/script>/);
-	if (blockquote) return { kind: 'blockquote', html: blockquote[0] };
+	if (blockquote) {
+		// Video ID lets the view render a plain iframe instead of executing
+		// TikTok's remote embed.js script
+		const videoId = blockquote[0].match(/data-video-id="(\d+)"/) ||
+			blockquote[0].match(/cite="https:\/\/www\.tiktok\.com\/[^"]*\/video\/(\d+)/);
+		return { kind: 'blockquote', html: blockquote[0], videoId: videoId ? videoId[1] : null };
+	}
 
 	const markdown = content.match(/!\[TikTok[^\]]*\]\((https?:\/\/[^)\s]+)\)/);
 	if (markdown) return { kind: 'markdown', markdown: markdown[0], url: markdown[1] };

@@ -1,5 +1,15 @@
 import { Platform, requestUrl } from 'obsidian';
-import * as JSZip from 'jszip';
+
+// Scripts installed from the repository at the latest release tag. Individual
+// raw files are fetched instead of a zip so no archive library needs to be
+// bundled into the plugin.
+const SCRIPT_FILES = [
+	'tiktok2text.sh',
+	'tiktok2text.py',
+	'manage_whisper.py',
+	'process_tiktoks.py',
+	'README.md'
+];
 
 export interface InstallProgress {
 	percent: number;
@@ -45,25 +55,28 @@ export class ScriptInstaller {
 				return { success: false, error: 'Failed to fetch latest release information from GitHub' };
 			}
 
-			// Step 2: Find whisper-scripts.zip asset
-			const asset = release.assets.find(a => a.name === 'whisper-scripts.zip');
-			if (!asset) {
-				return { success: false, error: 'whisper-scripts.zip not found in latest release' };
+			// Step 2: Download each script pinned to the release tag
+			if (!fs.existsSync(this.scriptsDir)) {
+				fs.mkdirSync(this.scriptsDir, { recursive: true });
 			}
 
-			// Step 3: Download the zip file
-			progressCallback?.({ percent: 30, status: 'Downloading scripts...' });
-			const zipBuffer = await this.downloadAsset(asset.browser_download_url);
+			for (let i = 0; i < SCRIPT_FILES.length; i++) {
+				const fileName = SCRIPT_FILES[i];
+				progressCallback?.({
+					percent: 20 + Math.round((i / SCRIPT_FILES.length) * 60),
+					status: `Downloading ${fileName}...`
+				});
 
-			if (!zipBuffer) {
-				return { success: false, error: 'Failed to download whisper-scripts.zip' };
+				const url = `https://raw.githubusercontent.com/ameyxd/obsidian-tiktoker/${release.tag_name}/whisper-scripts/${fileName}`;
+				const content = await this.downloadAsset(url);
+				if (!content) {
+					return { success: false, error: `Failed to download ${fileName}` };
+				}
+
+				fs.writeFileSync(path.join(this.scriptsDir, fileName), Buffer.from(content));
 			}
 
-			// Step 4: Extract the zip file
-			progressCallback?.({ percent: 60, status: 'Extracting files...' });
-			await this.extractZip(zipBuffer, this.pluginDir);
-
-			// Step 5: Verify installation
+			// Step 3: Verify installation
 			progressCallback?.({ percent: 90, status: 'Verifying installation...' });
 			const verified = this.verifyScripts();
 
@@ -130,37 +143,6 @@ export class ScriptInstaller {
 		} catch (error) {
 			console.error('Failed to download asset:', error);
 			return null;
-		}
-	}
-
-	private async extractZip(buffer: ArrayBuffer, targetPath: string): Promise<void> {
-		const fs = window.require('fs') as typeof import('fs');
-		const path = window.require('path') as typeof import('path');
-
-		const zip = await JSZip.loadAsync(buffer);
-
-		// Extract all files
-		const entries = Object.entries(zip.files);
-		for (const [filename, file] of entries) {
-			if (file.dir) {
-				// Create directory
-				const dirPath = path.join(targetPath, filename);
-				if (!fs.existsSync(dirPath)) {
-					fs.mkdirSync(dirPath, { recursive: true });
-				}
-			} else {
-				// Extract file
-				const content = await file.async('nodebuffer');
-				const filePath = path.join(targetPath, filename);
-
-				// Ensure directory exists
-				const fileDir = path.dirname(filePath);
-				if (!fs.existsSync(fileDir)) {
-					fs.mkdirSync(fileDir, { recursive: true });
-				}
-
-				fs.writeFileSync(filePath, content);
-			}
 		}
 	}
 

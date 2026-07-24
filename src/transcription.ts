@@ -139,7 +139,7 @@ export class TranscriptionService {
 				}
 			];
 
-			let lastError = null;
+			let lastError: Error | null = null;
 
 			for (const approach of approaches) {
 				try {
@@ -196,7 +196,7 @@ export class TranscriptionService {
 
 				} catch (error) {
 					this.debugLog(`Approach ${approach.name} failed:`, error.message);
-					lastError = error;
+					lastError = error instanceof Error ? error : new Error(String(error));
 					continue;
 				}
 			}
@@ -334,11 +334,9 @@ export class TranscriptionService {
 
 		try {
 			const childProcess = window.require('child_process') as typeof import('child_process');
-			const util = window.require('util') as typeof import('util');
 			const fs = window.require('fs') as typeof import('fs');
 			const path = window.require('path') as typeof import('path');
 
-			const execAsync = util.promisify(childProcess.exec);
 
 			if (!this.settings.whisperScriptPath) {
 				if (!isBulkProcessing) {
@@ -418,7 +416,7 @@ export class TranscriptionService {
 
 			this.debugLog('Browser fallback order:', browsers);
 
-			let lastError = null;
+			let lastError: Error | null = null;
 			for (const browser of browsers) {
 				try {
 					// Build command based on platform
@@ -447,7 +445,7 @@ export class TranscriptionService {
 
 				} catch (error) {
 					this.debugLog(`Browser ${browser} failed:`, error.message);
-					lastError = error;
+					lastError = error instanceof Error ? error : new Error(String(error));
 
 					if (error.message && (
 						error.message.includes('Operation not permitted') ||

@@ -22,6 +22,11 @@ export interface ExecResult {
 const MAX_OUTPUT_BYTES = 1024 * 1024;
 const STDIO_FLUSH_GRACE_MS = 1000;
 
+// Obsidian popout windows need window-scoped timers; unit tests run under
+// Node where window does not exist
+const timerHost: Pick<typeof globalThis, 'setTimeout' | 'clearTimeout'> =
+	typeof window !== 'undefined' ? window : globalThis;
+
 function killProcessTree(
 	childProcess: typeof import('child_process'),
 	child: import('child_process').ChildProcess
@@ -60,7 +65,7 @@ export function execWithHardTimeout(
 		let stdout = '';
 		let stderr = '';
 		let settled = false;
-		let graceTimer: ReturnType<typeof setTimeout> | null = null;
+		let graceTimer: ReturnType<typeof timerHost.setTimeout> | null = null;
 
 		child.stdout?.on('data', (chunk: Buffer) => {
 			if (stdout.length < MAX_OUTPUT_BYTES) stdout += chunk.toString();
@@ -72,8 +77,8 @@ export function execWithHardTimeout(
 		const finish = (settle: () => void) => {
 			if (settled) return;
 			settled = true;
-			clearTimeout(timeoutTimer);
-			if (graceTimer) clearTimeout(graceTimer);
+			timerHost.clearTimeout(timeoutTimer);
+			if (graceTimer) timerHost.clearTimeout(graceTimer);
 			// Stop accumulating output and release the pipe read-ends so a
 			// surviving descendant cannot keep handles (and the event loop)
 			// alive after the caller has its answer
@@ -96,7 +101,7 @@ export function execWithHardTimeout(
 			});
 		};
 
-		const timeoutTimer = setTimeout(() => {
+		const timeoutTimer = timerHost.setTimeout(() => {
 			finish(() => {
 				killProcessTree(childProcess, child);
 				const error = new Error(
@@ -118,7 +123,7 @@ export function execWithHardTimeout(
 		child.on('close', (code) => settleWithCode(code));
 		child.on('exit', (code) => {
 			if (settled) return;
-			graceTimer = setTimeout(() => {
+			graceTimer = timerHost.setTimeout(() => {
 				killProcessTree(childProcess, child);
 				settleWithCode(code);
 			}, STDIO_FLUSH_GRACE_MS);
