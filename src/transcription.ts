@@ -114,119 +114,6 @@ export class TranscriptionService {
 		});
 	}
 
-	private async getLocalTranscription(tiktokUrl: string): Promise<string> {
-		if (Platform.isMobile) {
-			throw new Error('Local transcription is not available on mobile devices');
-		}
-
-		try {
-			const childProcess = window.require('child_process') as typeof import('child_process');
-			const fs = window.require('fs') as typeof import('fs');
-			const path = window.require('path') as typeof import('path');
-
-			if (!fs.existsSync(this.settings.whisperScriptPath)) {
-				throw new Error('Whisper script not found at configured path');
-			}
-
-			new Notice('Generating transcription with local whisper...');
-
-			const env = {
-				...process.env,
-				PATH: [
-					'/opt/homebrew/bin',
-					'/usr/local/bin',
-					'/usr/bin',
-					'/bin',
-					process.env.PATH || ''
-				].filter(Boolean).join(':')
-			};
-
-			const scriptDir = path.dirname(this.settings.whisperScriptPath);
-			const approaches = [
-				{
-					name: 'script-no-cookies',
-					command: `cd "${scriptDir}" && bash "${this.settings.whisperScriptPath}" -m "${this.settings.whisperModel}" "${tiktokUrl}" 2>/dev/null || echo "DOWNLOAD_FAILED"`
-				},
-				{
-					name: this.settings.whisperBrowser + '-cookies',
-					command: `"${this.settings.whisperScriptPath}" -b ${this.settings.whisperBrowser} -m "${this.settings.whisperModel}" "${tiktokUrl}"`
-				}
-			];
-
-			let lastError: Error | null = null;
-
-			for (const approach of approaches) {
-				try {
-					this.debugLog(`Trying transcription approach ${approach.name}`);
-
-					const { stdout, stderr } = await execWithHardTimeout(
-						childProcess,
-						approach.command,
-						env,
-						transcriptionTimeoutMs(this.settings.urlTimeout)
-					);
-
-					if (stderr) {
-						this.debugLog(`Whisper stderr (${approach.name}):`, stderr);
-					}
-
-					if (stdout.includes('DOWNLOAD_FAILED') || stdout.includes('Failed to fetch audio')) {
-						this.debugLog(`${approach.name} - download failed, trying next approach...`);
-						continue;
-					}
-
-					const lines = stdout.split('\n');
-					const transcriptionLines = [];
-
-					for (const line of lines) {
-						const trimmedLine = line.trim();
-
-						// Filter out yt-dlp and script output
-						if (trimmedLine.startsWith('[') ||  // All bracketed messages [TikTok], [info], [download], [vm.tiktok], etc.
-							trimmedLine.startsWith('Extracting') ||
-							trimmedLine.startsWith('Extracted') ||
-							trimmedLine.startsWith('Deleting') ||
-							trimmedLine.startsWith('Saved:') ||
-							trimmedLine.startsWith('Downloading') ||
-							trimmedLine.includes('% of') ||
-							trimmedLine.includes('MiB/s') ||
-							trimmedLine.includes('ETA') ||
-							trimmedLine.includes('DOWNLOAD_FAILED')) {
-							continue;
-						}
-
-						if (trimmedLine.length > 0) {
-							transcriptionLines.push(trimmedLine);
-						}
-					}
-
-					const transcription = transcriptionLines.join(' ').trim();
-					if (transcription && transcription.length > 0) {
-						this.debugLog(`Transcription successful with ${approach.name}`);
-						return transcription;
-					}
-
-					this.debugLog(`No transcription from ${approach.name}, trying next...`);
-
-				} catch (error) {
-					this.debugLog(`Approach ${approach.name} failed:`, error.message);
-					lastError = error instanceof Error ? error : new Error(String(error));
-					continue;
-				}
-			}
-
-			if (lastError) {
-				throw lastError;
-			} else {
-				throw new Error('All transcription approaches failed to generate transcription');
-			}
-
-		} catch (error) {
-			console.error('TikToker: Local transcription error:', error);
-			throw new Error(`Failed to generate transcription: ${error.message}`);
-		}
-	}
-
 	async startAsyncTranscription(
 		url: string,
 		videoId: string | null,
@@ -259,6 +146,12 @@ export class TranscriptionService {
 		} catch (error) {
 			const timeElapsed = Date.now() - startTime;
 			console.error('TikToker: Async transcription failed:', error);
+			// Surface the reason: on mobile there is no reachable console, so a
+			// bare "Failed" in the status card is undiagnosable
+			if (!isBulkProcessing) {
+				const reason = error instanceof Error ? error.message : String(error);
+				new Notice(`Transcription failed: ${reason}`, 10000);
+			}
 			if (progressCallback) {
 				progressCallback('Failed', timeElapsed);
 			}

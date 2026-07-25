@@ -2469,17 +2469,14 @@ class TikTokerSettingTab extends PluginSettingTab {
 		// Create tab navigation
 		const tabNav = containerEl.createDiv({cls: 'tiktoker-tab-nav'});
 
-		let tabs = [
+		// Transcription is available on every platform: desktop runs the whisper
+		// scripts, mobile runs the bundled WebAssembly engine
+		const tabs = [
 			{id: 'general' as const, label: 'General'},
 			{id: 'transcription' as const, label: 'Transcription'},
 			{id: 'storage' as const, label: 'Storage'},
 			{id: 'review' as const, label: 'Review queue'}
 		];
-
-		// Hide transcription tab on mobile (desktop only feature)
-		if (Platform.isMobile) {
-			tabs = tabs.filter(tab => tab.id !== 'transcription');
-		}
 
 		tabs.forEach(tab => {
 			const tabButton = tabNav.createEl('button', {text: tab.label, cls: 'tiktoker-tab-button'});
@@ -2538,7 +2535,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		if (Platform.isMobile) {
 			const mobileNote = container.createEl('div', {cls: 'tiktoker-mobile-note'});
 			mobileNote.createEl('strong', {text: 'Note: '});
-			mobileNote.appendText('Transcription is only available on desktop (Windows, macOS, Linux) from version 1.5.0 onwards. Mobile devices can create tiktok notes but cannot generate transcriptions.');
+			mobileNote.appendText('Transcription runs on this device using a downloadable whisper model. Set it up in the transcription tab.');
 		}
 
 		const basicSection = this.createCollapsibleSection(container, 'Basic settings');
@@ -2724,8 +2721,13 @@ class TikTokerSettingTab extends PluginSettingTab {
 
 	renderTranscriptionTab(container: HTMLElement): void {
 		const infoBox = container.createEl('div', {cls: 'tiktoker-info-box'});
-		infoBox.createEl('strong', {text: 'Desktop only: '});
-		infoBox.appendText('Local transcription requires Python, yt-dlp, ffmpeg, and faster-whisper.');
+		if (Platform.isMobile) {
+			infoBox.createEl('strong', {text: 'On this device: '});
+			infoBox.appendText('Transcription runs locally with a bundled whisper engine. Download a model below to enable it.');
+		} else {
+			infoBox.createEl('strong', {text: 'Desktop: '});
+			infoBox.appendText('Local transcription requires Python, yt-dlp, ffmpeg, and faster-whisper.');
+		}
 
 		// Status Banner (shows installation status)
 		if (!Platform.isMobile && !this.plugin.settings.setupBannerDismissed) {
