@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-tiktoker",
-	"version": "1.5.63",
+	"version": "1.5.63-beta.1",
 	"description": "Save, transcribe, and review TikTok videos as Obsidian notes",
 	"main": "main.js",
 	"scripts": {
