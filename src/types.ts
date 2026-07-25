@@ -128,6 +128,10 @@ export interface TikTokerSettings {
 	whisperScriptPath: string;
 	whisperModel: 'tiny' | 'base' | 'small' | 'medium' | 'large';
 	whisperBrowser: 'chrome' | 'safari' | 'edge' | 'firefox';
+	// Mobile on-device transcription
+	mobileTranscriptionEnabled: boolean;
+	mobileWhisperModel: string;
+	mobileWifiOnly: boolean;
 	apiKey: string;
 	handlePrivateVideos: 'create-empty' | 'skip' | 'show-error';
 	duplicateFileHandling: 'replace' | 'duplicate' | 'skip';
@@ -191,6 +195,9 @@ export const DEFAULT_SETTINGS: TikTokerSettings = {
 	whisperScriptPath: '',
 	whisperModel: 'base',
 	whisperBrowser: 'chrome',
+	mobileTranscriptionEnabled: true,
+	mobileWhisperModel: 'tiny.en-q5_1',
+	mobileWifiOnly: true,
 	apiKey: '',
 	handlePrivateVideos: 'create-empty',
 	duplicateFileHandling: 'replace',

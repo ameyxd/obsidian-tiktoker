@@ -1,6 +1,15 @@
-import { App, Editor, MarkdownView, Modal, Notice, Platform, TFile } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Platform, TFile, normalizePath, requestUrl } from 'obsidian';
 import { parseWhisperStdout, transcriptionTimeoutMs } from './whisperOutput';
 import { execWithHardTimeout } from './processExec';
+import {
+	HttpRequest,
+	currentConnectionType,
+	decodeToWhisperPcm,
+	fetchTikTokMedia,
+	shouldDeferForNetwork
+} from './mobileAudio';
+import { WhisperEngine, isWhisperEngineSupported } from './whisperEngine';
+import { WHISPER_MODELS, getWhisperModel, modelStoragePath } from './whisperModel';
 
 // Simple data interface for transcription modal display
 interface TranscriptionModalData {
@@ -21,6 +30,11 @@ export interface TranscriptionSettings {
 	showTranscriptionCompleteNotification: boolean;
 	urlTimeout: number;
 	debugMode: boolean;
+	// Mobile on-device transcription
+	mobileTranscriptionEnabled: boolean;
+	mobileWhisperModel: string;
+	mobileWifiOnly: boolean;
+	pluginDir: string;
 }
 
 export class TranscriptionService {
@@ -318,19 +332,76 @@ export class TranscriptionService {
 		}
 
 		if (this.settings.transcriptionApi === 'whisper-local') {
-			return await this.getWhisperLocalTranscription(url, videoId, isBulkProcessing);
+			// Mobile has no shell, Python or ffmpeg, so it uses the bundled
+			// WebAssembly engine instead of the whisper scripts
+			return Platform.isMobile
+				? await this.getMobileWhisperTranscription(url, isBulkProcessing)
+				: await this.getWhisperLocalTranscription(url, videoId, isBulkProcessing);
 		}
 
 		return '';
 	}
 
-	private async getWhisperLocalTranscription(url: string, videoId: string | null, isBulkProcessing = false): Promise<string> {
-		if (Platform.isMobile) {
-			if (!isBulkProcessing) {
-				new Notice('Local transcription is not available on mobile devices');
-			}
-			return '';
+	// Reports why on-device transcription cannot run right now, or null if it can.
+	mobileTranscriptionBlocker(): string | null {
+		if (!this.settings.mobileTranscriptionEnabled) {
+			return 'On-device transcription is turned off in settings';
 		}
+		if (!isWhisperEngineSupported()) {
+			return 'This device cannot run on-device transcription';
+		}
+		if (shouldDeferForNetwork(currentConnectionType(), this.settings.mobileWifiOnly)) {
+			return 'Waiting for wi-fi (on-device transcription is set to wi-fi only)';
+		}
+		return null;
+	}
+
+	mobileModelPath(): string {
+		const model = getWhisperModel(this.settings.mobileWhisperModel) || WHISPER_MODELS[0];
+		return normalizePath(modelStoragePath(this.settings.pluginDir, model));
+	}
+
+	async isMobileModelDownloaded(): Promise<boolean> {
+		try {
+			return await this.app.vault.adapter.exists(this.mobileModelPath());
+		} catch {
+			return false;
+		}
+	}
+
+	private async getMobileWhisperTranscription(url: string, isBulkProcessing: boolean): Promise<string> {
+		const blocker = this.mobileTranscriptionBlocker();
+		if (blocker) throw new Error(blocker);
+
+		const model = getWhisperModel(this.settings.mobileWhisperModel) || WHISPER_MODELS[0];
+		if (!(await this.isMobileModelDownloaded())) {
+			throw new Error(`The ${model.label} model is not downloaded yet - download it in tiktoker settings`);
+		}
+
+		if (!isBulkProcessing) {
+			new Notice('Transcribing on this device, this can take a few minutes...');
+		}
+
+		this.debugLog('Mobile transcription: fetching audio');
+		const media = await fetchTikTokMedia(url, requestUrl as unknown as HttpRequest, this.debugLog.bind(this));
+
+		this.debugLog('Mobile transcription: decoding audio');
+		const pcm = await decodeToWhisperPcm(media.data);
+
+		this.debugLog('Mobile transcription: running whisper', { samples: pcm.length });
+		const modelData = await this.app.vault.adapter.readBinary(this.mobileModelPath());
+
+		const engine = new WhisperEngine();
+		try {
+			await engine.load(modelData);
+			// Non-English models accept a language hint; English-only builds ignore it
+			return await engine.transcribe(pcm, model.multilingual ? 'auto' : 'en');
+		} finally {
+			engine.dispose();
+		}
+	}
+
+	private async getWhisperLocalTranscription(url: string, videoId: string | null, isBulkProcessing = false): Promise<string> {
 
 		try {
 			const childProcess = window.require('child_process') as typeof import('child_process');

@@ -1,7 +1,9 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer, Menu, MenuItem, stringifyYaml, FileSystemAdapter } from 'obsidian';
+import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, Platform, request, requestUrl, TFile, ItemView, WorkspaceLeaf, MarkdownRenderer, Menu, MenuItem, stringifyYaml, FileSystemAdapter, normalizePath } from 'obsidian';
 import { TranscriptionService, TranscriptionSettings } from './src/transcription';
 import { ScriptInstaller } from './src/scriptInstaller';
 import { ScriptInstallationModal } from './src/scriptInstallationModal';
+import { WHISPER_MODELS, formatBytes, getWhisperModel, modelStoragePath } from './src/whisperModel';
+import { RangeRequest, downloadModel } from './src/modelDownloader';
 import {
 	appendQuickNote,
 	applySectionEdit,
@@ -149,6 +151,10 @@ interface TikTokerSettings {
 	whisperScriptPath: string;
 	whisperModel: 'tiny' | 'base' | 'small' | 'medium' | 'large';
 	whisperBrowser: 'chrome' | 'safari' | 'edge' | 'firefox';
+	// Mobile on-device transcription
+	mobileTranscriptionEnabled: boolean;
+	mobileWhisperModel: string;
+	mobileWifiOnly: boolean;
 	apiKey: string;
 	handlePrivateVideos: 'create-empty' | 'skip' | 'show-error';
 	duplicateFileHandling: 'replace' | 'duplicate' | 'skip';
@@ -212,6 +218,9 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	whisperScriptPath: '',
 	whisperModel: 'base',
 	whisperBrowser: 'chrome',
+	mobileTranscriptionEnabled: true,
+	mobileWhisperModel: 'tiny.en-q5_1',
+	mobileWifiOnly: true,
 	apiKey: '',
 	handlePrivateVideos: 'create-empty',
 	duplicateFileHandling: 'replace',
@@ -320,7 +329,11 @@ export default class TikTokerPlugin extends Plugin {
 			addTranscriptionPropertyToFrontmatter: this.settings.addTranscriptionPropertyToFrontmatter,
 			showTranscriptionCompleteNotification: this.settings.showTranscriptionCompleteNotification,
 			urlTimeout: this.settings.urlTimeout,
-			debugMode: this.settings.debugMode
+			debugMode: this.settings.debugMode,
+			mobileTranscriptionEnabled: this.settings.mobileTranscriptionEnabled,
+			mobileWhisperModel: this.settings.mobileWhisperModel,
+			mobileWifiOnly: this.settings.mobileWifiOnly,
+			pluginDir: this.manifest.dir || `${this.app.vault.configDir}/plugins/${this.manifest.id}`
 		};
 		this.transcriptionService = new TranscriptionService(
 			this.app,
@@ -1661,8 +1674,14 @@ export default class TikTokerPlugin extends Plugin {
 				}
 			}
 
-			// Start transcription asynchronously if enabled and not a slideshow (desktop only)
-			const shouldTranscribe = !Platform.isMobile &&
+			// Mobile transcribes on-device with the bundled WebAssembly engine,
+			// so it is no longer desktop-only - but it must be enabled for mobile
+			const platformCanTranscribe = Platform.isMobile
+				? this.settings.mobileTranscriptionEnabled
+				: true;
+
+			// Start transcription asynchronously if enabled and not a slideshow
+			const shouldTranscribe = platformCanTranscribe &&
 									this.settings.enableTranscription &&
 									this.settings.transcriptionApi !== 'none' &&
 									!data.isSlideshow &&
@@ -2238,7 +2257,11 @@ export default class TikTokerPlugin extends Plugin {
 				addTranscriptionPropertyToFrontmatter: this.settings.addTranscriptionPropertyToFrontmatter,
 				showTranscriptionCompleteNotification: this.settings.showTranscriptionCompleteNotification,
 				urlTimeout: this.settings.urlTimeout,
-				debugMode: this.settings.debugMode
+				debugMode: this.settings.debugMode,
+				mobileTranscriptionEnabled: this.settings.mobileTranscriptionEnabled,
+				mobileWhisperModel: this.settings.mobileWhisperModel,
+				mobileWifiOnly: this.settings.mobileWifiOnly,
+				pluginDir: this.manifest.dir || `${this.app.vault.configDir}/plugins/${this.manifest.id}`
 			};
 		}
 	}
@@ -2831,6 +2854,11 @@ class TikTokerSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}));
 
+			if (Platform.isMobile) {
+				this.renderMobileTranscriptionSection(container);
+				return;
+			}
+
 			const modelSection = this.createCollapsibleSection(container, 'Model management');
 
 			const modelInfo = modelSection.createEl('div', {cls: 'tiktoker-model-info-inline'});
@@ -2920,6 +2948,105 @@ class TikTokerSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}));
 		}
+	}
+
+	// Mobile has no shell, Python or ffmpeg, so transcription runs through the
+	// bundled WebAssembly whisper engine with a downloaded model instead of the
+	// desktop script pipeline.
+	renderMobileTranscriptionSection(container: HTMLElement): void {
+		const section = this.createCollapsibleSection(container, 'On-device transcription');
+
+		const info = section.createEl('div', {cls: 'tiktoker-model-info-inline'});
+		info.createEl('strong', {text: 'Runs entirely on this device. '});
+		info.appendText('Audio is downloaded from tiktok and transcribed locally with whisper. Nothing is sent to a transcription service. Expect a few minutes per video, and keep Obsidian open while it runs.');
+
+		new Setting(section)
+			.setName('Transcribe on this device')
+			.setDesc('Transcribe automatically when a tiktok note is created')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.mobileTranscriptionEnabled)
+				.onChange(async (value) => {
+					this.plugin.settings.mobileTranscriptionEnabled = value;
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		if (!this.plugin.settings.mobileTranscriptionEnabled) return;
+
+		new Setting(section)
+			.setName('Wi-fi only')
+			.setDesc('Skip transcription on cellular to save data. Note that iOS cannot report the connection type, so this has no effect there.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.mobileWifiOnly)
+				.onChange(async (value) => {
+					this.plugin.settings.mobileWifiOnly = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(section)
+			.setName('Whisper model')
+			.setDesc('Smaller models transcribe faster and use less storage')
+			.addDropdown(dropdown => {
+				WHISPER_MODELS.forEach(model => dropdown.addOption(model.id, model.label));
+				dropdown
+					.setValue(this.plugin.settings.mobileWhisperModel)
+					.onChange(async (value) => {
+						this.plugin.settings.mobileWhisperModel = value;
+						await this.plugin.saveSettings();
+						this.display();
+					});
+			});
+
+		this.renderModelDownloadSetting(section);
+	}
+
+	renderModelDownloadSetting(section: HTMLElement): void {
+		const model = getWhisperModel(this.plugin.settings.mobileWhisperModel) || WHISPER_MODELS[0];
+		const modelPath = normalizePath(modelStoragePath(this.plugin.manifest.dir || '', model));
+		const setting = new Setting(section).setName('Model file');
+
+		void this.plugin.app.vault.adapter.exists(modelPath).then((exists) => {
+			if (exists) {
+				setting.setDesc(`Downloaded (${formatBytes(model.approxBytes)}). Ready to transcribe.`);
+				setting.addButton(button => button
+					.setButtonText('Delete')
+					.setWarning()
+					.onClick(async () => {
+						await this.plugin.app.vault.adapter.remove(modelPath);
+						new Notice('Model deleted');
+						this.display();
+					}));
+				return;
+			}
+
+			setting.setDesc(`Not downloaded yet (${formatBytes(model.approxBytes)} download required)`);
+			setting.addButton(button => button
+				.setButtonText('Download')
+				.setCta()
+				.onClick(async () => {
+					button.setDisabled(true);
+					try {
+						const data = await downloadModel(
+							model,
+							requestUrl as unknown as RangeRequest,
+							{ onProgress: (percent) => button.setButtonText(`${percent}%`) }
+						);
+
+						const folder = modelPath.substring(0, modelPath.lastIndexOf('/'));
+						if (!(await this.plugin.app.vault.adapter.exists(folder))) {
+							await this.plugin.app.vault.adapter.mkdir(folder);
+						}
+						await this.plugin.app.vault.adapter.writeBinary(modelPath, data);
+
+						new Notice('Model downloaded, on-device transcription is ready');
+						this.display();
+					} catch (error) {
+						console.error('Model download failed:', error);
+						new Notice(`Model download failed: ${error.message}`);
+						button.setDisabled(false).setButtonText('Download');
+					}
+				}));
+		});
 	}
 
 	renderStorageTab(container: HTMLElement): void {

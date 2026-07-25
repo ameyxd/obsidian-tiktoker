@@ -17,7 +17,7 @@ This plugin was built as a personal project to fit my workflow and habits around
 - **Duplicate handling**: Intelligent detection with user prompts
 - **Hashtag integration**: Adds hashtags to content and properties
 - **Flexible templates**: Customize note titles and content layout
-- **Local transcription**: Desktop-only speech-to-text using whisper.cpp (requires Python, yt-dlp, ffmpeg)
+- **Local transcription**: Speech-to-text that runs entirely on your device. Desktop uses whisper.cpp via Python, yt-dlp and ffmpeg; mobile (iOS and Android) uses a bundled WebAssembly build of whisper.cpp with a downloadable model - no cloud service either way
 - **Batch processing**: Handle multiple URLs at once
 
 #### Review Queue System
@@ -95,7 +95,10 @@ The plugin supports the following template variables:
 
 ## Transcription Setup
 
-TikToker includes local transcription powered by OpenAI's Whisper model. This feature is desktop-only and requires a one-time setup.
+TikToker includes local transcription powered by OpenAI's Whisper model. Nothing is sent to a transcription service on any platform.
+
+- **Desktop**: uses the whisper.cpp scripts and needs a one-time setup (Python, yt-dlp, ffmpeg) described below.
+- **Mobile (iOS and Android)**: uses a WebAssembly build of whisper.cpp bundled with the plugin. There is nothing to install - open Settings, go to Transcription, and download a whisper model (about 31 mb for the default). See [Mobile transcription](#mobile-transcription).
 
 ### Disclosure
 
@@ -125,8 +128,7 @@ If the automatic installer fails, you can install manually:
 
 ### System Requirements
 
-The transcription feature requires:
-- **Desktop only** (not available on mobile)
+Desktop transcription requires:
 - **Python 3.8+**
 - **yt-dlp** (for downloading TikTok audio)
 - **ffmpeg** (for audio processing)
@@ -150,6 +152,38 @@ Choose from different Whisper models in settings (larger = more accurate but slo
 - **small**: Better accuracy
 - **medium**: High accuracy
 - **large**: Maximum accuracy, slowest
+
+## Mobile transcription
+
+On iOS and Android, transcription runs on the phone itself using a WebAssembly build of whisper.cpp that ships inside the plugin. There is no shell, Python, yt-dlp or ffmpeg involved, and audio never leaves your device.
+
+### Setup
+
+1. Open **Settings > TikToker > Transcription**
+2. Turn on **Transcribe on this device** (on by default)
+3. Pick a **Whisper model** and tap **Download** - the default is about 31 mb
+
+The model is stored inside the plugin folder in your vault. Delete it any time from the same screen to reclaim the space.
+
+### What to expect
+
+- **Speed**: inference is single threaded on mobile, so budget a few minutes for a typical video. Keep Obsidian open while it runs; the status card does not block the rest of the app.
+- **Wi-fi only**: on by default so video downloads do not use cellular data. Android reports the connection type; iOS does not expose it, so the setting has no effect there.
+- **Battery**: a full transcription is a sustained CPU load. Turn off **Transcribe on this device** if you would rather transcribe on desktop.
+- **Photo slideshows and private videos** have no downloadable audio and are skipped, the same as on desktop.
+
+### Model choices
+
+| Model | Size | Notes |
+|-------|------|-------|
+| Tiny English | ~31 mb | Default. Fastest, good for clear English speech |
+| Tiny multilingual | ~32 mb | Same speed, supports non-English audio |
+| Base English | ~57 mb | Noticeably more accurate, roughly twice as slow |
+| Base multilingual | ~57 mb | Best accuracy of the mobile options |
+
+## Credits
+
+Transcription is powered by [whisper.cpp](https://github.com/ggml-org/whisper.cpp) by Georgi Gerganov (MIT licensed), using OpenAI's Whisper models. The mobile engine at `src/vendor/whisper-wasm.txt` is a generated WebAssembly build of whisper.cpp; regenerate it with `./scripts/build-whisper-wasm.sh`.
 
 ## Installation
 
@@ -201,7 +235,8 @@ Access plugin settings through Settings → Community Plugins → TikToker:
 TikToker's optional transcription feature runs entirely on your machine, which requires capabilities beyond the vault API. Nothing is sent to third-party services other than TikTok itself (to fetch video metadata and media) and GitHub (to download the transcription scripts).
 
 - **Clipboard access**: "Read tiktok from clipboard" reads your clipboard to find TikTok links. The clipboard is never written to except by the explicit copy buttons.
-- **Shell execution and filesystem access** (desktop only, only when transcription is enabled): the plugin runs the bundled whisper scripts via the system shell to download audio with yt-dlp and transcribe it locally with faster-whisper. The scripts and their Python environment live inside the plugin folder.
+- **Shell execution and filesystem access** (desktop only, only when transcription is enabled): the plugin runs the bundled whisper scripts via the system shell to download audio with yt-dlp and transcribe it locally with faster-whisper. The scripts and their Python environment live inside the plugin folder. Mobile uses no shell and no filesystem access outside the vault.
+- **Model download** (mobile only, only when you tap Download): whisper model weights are fetched from HuggingFace and stored inside the plugin folder.
 - **Vault file enumeration**: the review queue lists the markdown files inside your configured TikTok folder to build its queue. No other vault files are read.
 - **Network**: TikTok oEmbed/media endpoints for note creation and audio download; raw.githubusercontent.com for installing the transcription scripts. There is no telemetry.
 

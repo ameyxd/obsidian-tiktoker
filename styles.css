@@ -1642,3 +1642,48 @@ button.tiktoker-copy-success,
 .tiktoker-copy-success {
 	background-color: var(--interactive-success);
 }
+
+/* --- Mobile (iOS/Android) --- */
+
+/* The transcription status card is sized for a desktop corner; on a phone it
+   should span the width and clear the notch/status bar. */
+.is-mobile .modal.tiktoker-modal-fixed-top-right {
+	top: calc(8px + env(safe-area-inset-top));
+	right: 8px;
+	left: 8px;
+	width: auto;
+	max-width: none;
+}
+
+.is-mobile .modal.tiktoker-modal-fixed-bottom-right {
+	bottom: calc(8px + env(safe-area-inset-bottom));
+	right: 8px;
+	left: auto;
+	width: 60%;
+	max-width: 240px;
+}
+
+/* Touch targets: the minimize/close controls are small on a phone */
+.is-mobile .tiktoker-minimize-btn,
+.is-mobile .tiktoker-close-btn {
+	min-width: 44px;
+	min-height: 44px;
+	font-size: 20px;
+}
+
+/* On-device transcription can run for minutes; make the status legible */
+.is-mobile .tiktoker-status-text {
+	font-size: 1em;
+}
+
+/* Review queue controls wrap rather than overflow on narrow screens */
+.is-mobile .tiktoker-review-filter-checkboxes,
+.is-mobile .tiktoker-review-filter-inputs,
+.is-mobile .tiktoker-review-status-controls,
+.is-mobile .tiktoker-review-nav-controls {
+	flex-wrap: wrap;
+}
+
+.is-mobile .tiktoker-review-embed iframe {
+	max-width: 100%;
+}

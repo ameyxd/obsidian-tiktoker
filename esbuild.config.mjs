@@ -32,6 +32,12 @@ const context = await esbuild.context({
 		"@lezer/highlight",
 		"@lezer/lr",
 		...builtins],
+	// The vendored whisper WASM engine is loaded as source text so it can be
+	// handed to a Web Worker at runtime (inference is synchronous and would
+	// otherwise block the UI for minutes).
+	loader: {
+		".txt": "text",
+	},
 	format: "cjs",
 	target: "es2018",
 	logLevel: "info",
