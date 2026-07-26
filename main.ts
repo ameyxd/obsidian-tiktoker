@@ -266,6 +266,7 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 export default class TikTokerPlugin extends Plugin {
 	settings: TikTokerSettings;
 	transcriptionService: TranscriptionService;
+	private pendingScanInProgress = false;
 
 	private debugLog(message: string, ...args: unknown[]): void {
 		if (this.settings.debugMode) {
@@ -453,9 +454,14 @@ export default class TikTokerPlugin extends Plugin {
 		this.addSettingTab(new TikTokerSettingTab(this.app, this));
 
 		// Pick up anything a phone left pending (desktop only; no-ops on mobile)
-		this.app.workspace.onLayoutReady(() => {
-			window.setTimeout(() => void this.processPendingTranscriptions(), 3000);
-		});
+		// 'resolved' fires when the metadata cache has finished indexing, and
+		// again after each later batch of changes - including notes arriving
+		// via sync while the app is open. onLayoutReady is too early: the
+		// workspace is ready long before frontmatter is indexed on a large
+		// vault, so the scan would find nothing and return silently.
+		this.registerEvent(this.app.metadataCache.on('resolved', () => {
+			void this.processPendingTranscriptions();
+		}));
 
 		this.cleanupStaleReviewSessions();
 	}
@@ -499,6 +505,12 @@ export default class TikTokerPlugin extends Plugin {
 
 	// Desktop side: transcribe everything a phone left behind.
 	async processPendingTranscriptions(triggeredManually = false): Promise<void> {
+		// The cache-resolved event fires repeatedly; never run two passes at once
+		if (this.pendingScanInProgress) {
+			if (triggeredManually) new Notice('Already transcribing pending tiktoks');
+			return;
+		}
+
 		if (Platform.isMobile) {
 			if (triggeredManually) {
 				new Notice('Pending tiktoks are transcribed on desktop, not on mobile');
@@ -530,33 +542,38 @@ export default class TikTokerPlugin extends Plugin {
 		new Notice(pendingNoticeText(pending.length));
 		this.debugLog('Processing pending transcriptions:', pending);
 
-		// Sequential: each run is CPU heavy, and the whisper scripts are not
-		// safe to run concurrently against the same model cache
-		for (const path of pending) {
-			const file = this.app.vault.getAbstractFileByPath(path);
-			if (!(file instanceof TFile)) continue;
+		this.pendingScanInProgress = true;
+		try {
+			// Sequential: each run is CPU heavy, and the whisper scripts are not
+			// safe to run concurrently against the same model cache
+			for (const path of pending) {
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (!(file instanceof TFile)) continue;
 
-			const content = await this.app.vault.cachedRead(file);
-			const url = resolveTikTokUrl(this.app.metadataCache.getFileCache(file)?.frontmatter, content);
-			if (!url) {
-				// Do not leave the note stuck in the queue forever
-				this.debugLog('Pending note has no tiktok url, clearing flag:', path);
-				await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-					delete frontmatter[PENDING_FLAG];
-				});
-				continue;
-			}
+				const content = await this.app.vault.cachedRead(file);
+				const url = resolveTikTokUrl(this.app.metadataCache.getFileCache(file)?.frontmatter, content);
+				if (!url) {
+					// Do not leave the note stuck in the queue forever
+					this.debugLog('Pending note has no tiktok url, clearing flag:', path);
+					await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+						delete frontmatter[PENDING_FLAG];
+					});
+					continue;
+				}
 
-			this.debugLog('Transcribing pending note:', path);
-			try {
-				// Not bulk: this should surface its own failure reason
-				await this.transcriptionService.startAsyncTranscription(url, null, path, false);
-			} catch (error) {
-				console.error(`Pending transcription failed for ${path}:`, error);
-				continue;
+				this.debugLog('Transcribing pending note:', path);
+				try {
+					// Not bulk: this should surface its own failure reason
+					await this.transcriptionService.startAsyncTranscription(url, null, path, false);
+				} catch (error) {
+					console.error(`Pending transcription failed for ${path}:`, error);
+					continue;
+				}
+				// updateFileWithTranscription clears the flag once a transcript
+				// lands, so a failed run stays queued and is retried next time
 			}
-			// updateFileWithTranscription clears the flag once a transcript
-			// lands, so a failed run stays queued and is retried next time
+		} finally {
+			this.pendingScanInProgress = false;
 		}
 	}
 
