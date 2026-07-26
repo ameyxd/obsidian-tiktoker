@@ -1,6 +1,7 @@
 import { App, Editor, MarkdownView, Modal, Notice, Platform, TFile } from 'obsidian';
 import { parseWhisperStdout, transcriptionTimeoutMs } from './whisperOutput';
 import { execWithHardTimeout } from './processExec';
+import { PENDING_FLAG } from './pendingTranscription';
 
 // Simple data interface for transcription modal display
 interface TranscriptionModalData {
@@ -291,14 +292,18 @@ export class TranscriptionService {
 				}
 			});
 
-			// Add transcribed property to frontmatter if enabled (using proper API)
-			if (this.settings.addTranscriptionPropertyToFrontmatter) {
-				await this.app.fileManager.processFrontMatter(file, (fm) => {
-					if (!fm.transcribed) {
-						fm.transcribed = true;
-					}
-				});
-			}
+			// Update frontmatter: mark as transcribed if enabled, and always clear
+			// the desktop-assist flag so a note transcribed by any route (manual
+			// command, note creation, bulk, or the pending queue) stops being
+			// picked up again.
+			await this.app.fileManager.processFrontMatter(file, (fm) => {
+				if (this.settings.addTranscriptionPropertyToFrontmatter && !fm.transcribed) {
+					fm.transcribed = true;
+				}
+				if (PENDING_FLAG in fm) {
+					delete fm[PENDING_FLAG];
+				}
+			});
 
 			this.debugLog(`Transcription updated for ${filePath}`);
 
