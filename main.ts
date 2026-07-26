@@ -2,6 +2,7 @@ import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Set
 import { TranscriptionService, TranscriptionSettings } from './src/transcription';
 import { ScriptInstaller } from './src/scriptInstaller';
 import { ScriptInstallationModal } from './src/scriptInstallationModal';
+import { PENDING_FLAG, pendingNoticeText, selectPendingNotes, shouldFlagForDesktop } from './src/pendingTranscription';
 import {
 	appendQuickNote,
 	applySectionEdit,
@@ -149,6 +150,8 @@ interface TikTokerSettings {
 	whisperScriptPath: string;
 	whisperModel: 'tiny' | 'base' | 'small' | 'medium' | 'large';
 	whisperBrowser: 'chrome' | 'safari' | 'edge' | 'firefox';
+	// Transcribe notes saved on mobile when the vault is next opened on desktop
+	desktopAssistedTranscription: boolean;
 	apiKey: string;
 	handlePrivateVideos: 'create-empty' | 'skip' | 'show-error';
 	duplicateFileHandling: 'replace' | 'duplicate' | 'skip';
@@ -212,6 +215,7 @@ const DEFAULT_SETTINGS: TikTokerSettings = {
 	whisperScriptPath: '',
 	whisperModel: 'base',
 	whisperBrowser: 'chrome',
+	desktopAssistedTranscription: true,
 	apiKey: '',
 	handlePrivateVideos: 'create-empty',
 	duplicateFileHandling: 'replace',
@@ -372,6 +376,14 @@ export default class TikTokerPlugin extends Plugin {
 		});
 
 		this.addCommand({
+			id: 'transcribe-pending-mobile-tiktoks',
+			name: 'Transcribe tiktoks saved on mobile',
+			callback: () => {
+				void this.processPendingTranscriptions(true);
+			}
+		});
+
+		this.addCommand({
 			id: 'install-transcription-scripts',
 			name: 'Install transcription scripts',
 			callback: () => {
@@ -440,6 +452,11 @@ export default class TikTokerPlugin extends Plugin {
 
 		this.addSettingTab(new TikTokerSettingTab(this.app, this));
 
+		// Pick up anything a phone left pending (desktop only; no-ops on mobile)
+		this.app.workspace.onLayoutReady(() => {
+			window.setTimeout(() => void this.processPendingTranscriptions(), 3000);
+		});
+
 		this.cleanupStaleReviewSessions();
 	}
 
@@ -459,6 +476,86 @@ export default class TikTokerPlugin extends Plugin {
 		if (result.removed.length > 0) {
 			this.settings.reviewSessions = result.kept;
 			void this.saveSettings();
+		}
+	}
+
+	// Marks a note saved on mobile so the desktop can transcribe it later.
+	async flagForDesktopTranscription(filePath: string, isBulkProcessing: boolean): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(filePath);
+		if (!(file instanceof TFile)) return;
+
+		try {
+			await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+				frontmatter[PENDING_FLAG] = true;
+			});
+			this.debugLog('Flagged for desktop transcription:', filePath);
+			if (!isBulkProcessing) {
+				new Notice('Saved. This tiktok will be transcribed when you open this vault on desktop.');
+			}
+		} catch (error) {
+			console.error('Failed to flag note for desktop transcription:', error);
+		}
+	}
+
+	// Desktop side: transcribe everything a phone left behind.
+	async processPendingTranscriptions(triggeredManually = false): Promise<void> {
+		if (Platform.isMobile) {
+			if (triggeredManually) {
+				new Notice('Pending tiktoks are transcribed on desktop, not on mobile');
+			}
+			return;
+		}
+
+		if (!this.settings.enableTranscription || this.settings.transcriptionApi === 'none') {
+			if (triggeredManually) new Notice('Transcription is disabled in settings');
+			return;
+		}
+
+		const folder = this.settings.outputFolder || 'Tiktoks';
+		const notes = this.app.vault.getMarkdownFiles()
+			.filter(file => file.path.startsWith(folder + '/'))
+			.map(file => ({
+				path: file.path,
+				frontmatter: this.app.metadataCache.getFileCache(file)?.frontmatter
+			}));
+
+		const pending = selectPendingNotes(notes);
+		if (pending.length === 0) {
+			if (triggeredManually) new Notice('No tiktoks are waiting to be transcribed');
+			return;
+		}
+
+		new Notice(pendingNoticeText(pending.length));
+		this.debugLog('Processing pending transcriptions:', pending);
+
+		// Sequential: each run is CPU heavy, and the whisper scripts are not
+		// safe to run concurrently against the same model cache
+		for (const path of pending) {
+			const file = this.app.vault.getAbstractFileByPath(path);
+			if (!(file instanceof TFile)) continue;
+
+			const url = this.app.metadataCache.getFileCache(file)?.frontmatter?.url;
+			if (typeof url !== 'string' || !url) {
+				this.debugLog('Pending note has no url, skipping:', path);
+				continue;
+			}
+
+			try {
+				await this.transcriptionService.startAsyncTranscription(url, null, path, true);
+			} catch (error) {
+				console.error(`Pending transcription failed for ${path}:`, error);
+				continue;
+			}
+
+			// Clear the flag only after a transcript actually landed, so a
+			// failed run is retried next time rather than silently dropped
+			const transcribed = this.app.metadataCache.getFileCache(file)?.frontmatter?.transcribed;
+			const content = await this.app.vault.cachedRead(file);
+			if (transcribed === true || content.includes('## Transcription')) {
+				await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+					delete frontmatter[PENDING_FLAG];
+				});
+			}
 		}
 	}
 
@@ -1693,6 +1790,20 @@ export default class TikTokerPlugin extends Plugin {
 				// For bulk processing, transcription will be handled separately with progress tracking
 			}
 
+			// On mobile the audio cannot be downloaded at all (TikTok requires a
+			// browser TLS fingerprint, and its CDN will not share the response
+			// with a plugin origin), so hand the note to desktop instead.
+			if (shouldFlagForDesktop({
+				isMobile: Platform.isMobile,
+				desktopAssistEnabled: this.settings.desktopAssistedTranscription,
+				enableTranscription: this.settings.enableTranscription,
+				transcriptionApi: this.settings.transcriptionApi,
+				isSlideshow: data.isSlideshow,
+				isPrivate: data.isPrivate
+			})) {
+				await this.flagForDesktopTranscription(filePath, isBulkProcessing);
+			}
+
 			return { success: true, fileName, noteTitle };
 		} catch (error) {
 			if (!isBulkProcessing) new Notice('Failed to create note');
@@ -2515,7 +2626,7 @@ class TikTokerSettingTab extends PluginSettingTab {
 		if (Platform.isMobile) {
 			const mobileNote = container.createEl('div', {cls: 'tiktoker-mobile-note'});
 			mobileNote.createEl('strong', {text: 'Note: '});
-			mobileNote.appendText('Transcription is only available on desktop (Windows, macOS, Linux) from version 1.5.0 onwards. Mobile devices can create tiktok notes but cannot generate transcriptions.');
+			mobileNote.appendText('Transcription cannot run on mobile because tiktok only serves video to a real browser session, which a plugin cannot provide. Tiktoks you save here are marked pending and transcribed automatically the next time you open this vault on desktop.');
 		}
 
 		const basicSection = this.createCollapsibleSection(container, 'Basic settings');
@@ -2786,6 +2897,16 @@ class TikTokerSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.enableManualTranscriptionCommand)
 					.onChange(async (value) => {
 						this.plugin.settings.enableManualTranscriptionCommand = value;
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(mainSection)
+				.setName('Transcribe tiktoks saved on mobile')
+				.setDesc('Tiktoks saved on a phone cannot be transcribed there, so they are marked pending and transcribed on this computer when the vault opens')
+				.addToggle(toggle => toggle
+					.setValue(this.plugin.settings.desktopAssistedTranscription)
+					.onChange(async (value) => {
+						this.plugin.settings.desktopAssistedTranscription = value;
 						await this.plugin.saveSettings();
 					}));
 

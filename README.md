@@ -134,6 +134,14 @@ The transcription feature requires:
 
 The setup script will guide you through installing missing dependencies.
 
+### Saving tiktoks on mobile
+
+Transcription cannot run on a phone. TikTok only serves video to clients presenting a real browser TLS handshake and matching session, and its CDN refuses to share responses with any origin other than `tiktok.com`, so an Obsidian plugin has no route to the audio on mobile - neither Obsidian's `requestUrl` nor a browser `fetch` can retrieve it.
+
+Instead, tiktoks you save on mobile are marked `transcription_pending: true` in their frontmatter. The next time you open the same vault on desktop, the plugin transcribes them automatically with the normal pipeline and clears the flag. You can also run it on demand with the **Transcribe tiktoks saved on mobile** command.
+
+If a run fails, the flag is deliberately left in place so the note is retried next time rather than silently skipped. Turn the whole behaviour off with **Transcribe tiktoks saved on mobile** in transcription settings.
+
 ### Available Commands
 
 Once scripts are installed, these commands become available:
