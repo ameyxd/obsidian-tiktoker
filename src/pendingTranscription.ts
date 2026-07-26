@@ -58,6 +58,27 @@ export function selectPendingNotes(notes: NoteMeta[]): string[] {
 		.map(note => note.path);
 }
 
+const TIKTOK_URL_PATTERN = /https:\/\/(?:www\.|vm\.|m\.)?tiktok\.com\/[^\s)"'<]+/;
+
+// The `url` property is only written when the "include URL" setting is on, and
+// notes can be moved or edited, so fall back to the first tiktok link in the
+// body - the same approach the manual transcribe command uses.
+export function resolveTikTokUrl(
+	frontmatter: Record<string, unknown> | undefined,
+	content: string
+): string | null {
+	const fromFrontmatter = frontmatter?.url;
+	if (typeof fromFrontmatter === 'string' && TIKTOK_URL_PATTERN.test(fromFrontmatter)) {
+		return fromFrontmatter;
+	}
+
+	// Skip the embed iframe: its /embed/v2/ form is not accepted by yt-dlp
+	for (const match of content.match(new RegExp(TIKTOK_URL_PATTERN, 'g')) || []) {
+		if (!match.includes('/embed/')) return match;
+	}
+	return null;
+}
+
 export function pendingNoticeText(count: number): string {
 	return count === 1
 		? 'Transcribing 1 tiktok saved on mobile...'

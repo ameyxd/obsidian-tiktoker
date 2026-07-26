@@ -2,7 +2,7 @@ import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Set
 import { TranscriptionService, TranscriptionSettings } from './src/transcription';
 import { ScriptInstaller } from './src/scriptInstaller';
 import { ScriptInstallationModal } from './src/scriptInstallationModal';
-import { PENDING_FLAG, pendingNoticeText, selectPendingNotes, shouldFlagForDesktop } from './src/pendingTranscription';
+import { PENDING_FLAG, pendingNoticeText, resolveTikTokUrl, selectPendingNotes, shouldFlagForDesktop } from './src/pendingTranscription';
 import {
 	appendQuickNote,
 	applySectionEdit,
@@ -511,15 +511,17 @@ export default class TikTokerPlugin extends Plugin {
 			return;
 		}
 
-		const folder = this.settings.outputFolder || 'Tiktoks';
-		const notes = this.app.vault.getMarkdownFiles()
-			.filter(file => file.path.startsWith(folder + '/'))
-			.map(file => ({
-				path: file.path,
-				frontmatter: this.app.metadataCache.getFileCache(file)?.frontmatter
-			}));
+		// Scan the whole vault rather than the output folder: notes get moved
+		// (by hand or by other plugins), and the pending flag is specific
+		// enough on its own.
+		const notes = this.app.vault.getMarkdownFiles().map(file => ({
+			path: file.path,
+			frontmatter: this.app.metadataCache.getFileCache(file)?.frontmatter
+		}));
 
 		const pending = selectPendingNotes(notes);
+		this.debugLog('Pending transcription scan:', { scanned: notes.length, pending: pending.length });
+
 		if (pending.length === 0) {
 			if (triggeredManually) new Notice('No tiktoks are waiting to be transcribed');
 			return;
@@ -534,28 +536,27 @@ export default class TikTokerPlugin extends Plugin {
 			const file = this.app.vault.getAbstractFileByPath(path);
 			if (!(file instanceof TFile)) continue;
 
-			const url = this.app.metadataCache.getFileCache(file)?.frontmatter?.url;
-			if (typeof url !== 'string' || !url) {
-				this.debugLog('Pending note has no url, skipping:', path);
+			const content = await this.app.vault.cachedRead(file);
+			const url = resolveTikTokUrl(this.app.metadataCache.getFileCache(file)?.frontmatter, content);
+			if (!url) {
+				// Do not leave the note stuck in the queue forever
+				this.debugLog('Pending note has no tiktok url, clearing flag:', path);
+				await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+					delete frontmatter[PENDING_FLAG];
+				});
 				continue;
 			}
 
+			this.debugLog('Transcribing pending note:', path);
 			try {
-				await this.transcriptionService.startAsyncTranscription(url, null, path, true);
+				// Not bulk: this should surface its own failure reason
+				await this.transcriptionService.startAsyncTranscription(url, null, path, false);
 			} catch (error) {
 				console.error(`Pending transcription failed for ${path}:`, error);
 				continue;
 			}
-
-			// Clear the flag only after a transcript actually landed, so a
-			// failed run is retried next time rather than silently dropped
-			const transcribed = this.app.metadataCache.getFileCache(file)?.frontmatter?.transcribed;
-			const content = await this.app.vault.cachedRead(file);
-			if (transcribed === true || content.includes('## Transcription')) {
-				await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
-					delete frontmatter[PENDING_FLAG];
-				});
-			}
+			// updateFileWithTranscription clears the flag once a transcript
+			// lands, so a failed run stays queued and is retried next time
 		}
 	}
 

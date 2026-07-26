@@ -138,7 +138,11 @@ The setup script will guide you through installing missing dependencies.
 
 Transcription cannot run on a phone. TikTok only serves video to clients presenting a real browser TLS handshake and matching session, and its CDN refuses to share responses with any origin other than `tiktok.com`, so an Obsidian plugin has no route to the audio on mobile - neither Obsidian's `requestUrl` nor a browser `fetch` can retrieve it.
 
-Instead, tiktoks you save on mobile are marked `transcription_pending: true` in their frontmatter. The next time you open the same vault on desktop, the plugin transcribes them automatically with the normal pipeline and clears the flag. You can also run it on demand with the **Transcribe tiktoks saved on mobile** command.
+Instead, tiktoks you save on mobile are marked `transcription_pending: true` in their frontmatter. The next time you open that vault on desktop, the plugin scans for pending notes and transcribes them with the normal pipeline.
+
+The flag is cleared whenever a transcript is written by any route, so transcribing a pending note yourself with **Transcribe tiktok in current note** also takes it out of the queue.
+
+The scan runs when the vault opens on desktop. If desktop is already running when a note syncs in, run **Transcribe tiktoks saved on mobile** from the command palette to pick it up without restarting.
 
 If a run fails, the flag is deliberately left in place so the note is retried next time rather than silently skipped. Turn the whole behaviour off with **Transcribe tiktoks saved on mobile** in transcription settings.
 
