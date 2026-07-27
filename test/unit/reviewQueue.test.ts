@@ -8,6 +8,7 @@ import {
 	firstContentHashtag,
 	hasTag,
 	matchesStatusFilters,
+	noteInFolder,
 	normalizeTags,
 	pruneStaleSessions,
 	sortQueue,
@@ -330,6 +331,27 @@ describe('buildDataviewQuery', () => {
 	test('escapes double quotes in filter values', () => {
 		const result = buildDataviewQuery('LIST', 'Tiktoks', '', 'say "hi"');
 		expect(result?.query).not.toContain('contains(file.text, "say "hi"")');
+	});
+
+	test('omits FROM entirely when folder is blank (vault root)', () => {
+		const result = buildDataviewQuery('LIST', '', 'manifest', '');
+		expect(result?.query).not.toContain('FROM');
+	});
+});
+
+describe('noteInFolder', () => {
+	test('matches everything when folder is blank (vault root)', () => {
+		expect(noteInFolder('My Note.md', '')).toBe(true);
+		expect(noteInFolder('Some/Nested/Note.md', '')).toBe(true);
+	});
+
+	test('only matches paths inside the given folder', () => {
+		expect(noteInFolder('Tiktoks/My Note.md', 'Tiktoks')).toBe(true);
+		expect(noteInFolder('Other/My Note.md', 'Tiktoks')).toBe(false);
+	});
+
+	test('does not match a differently-named folder with the same prefix', () => {
+		expect(noteInFolder('TiktoksArchive/My Note.md', 'Tiktoks')).toBe(false);
 	});
 });
 

@@ -19,6 +19,14 @@ export interface QueueStatusFilters {
 	starred: boolean;
 }
 
+// An empty outputFolder setting means "vault root" (this is how createTikTokNote
+// already treats it when building a note's path). Callers that list existing
+// notes back out of that folder must agree, or a blank outputFolder silently
+// matches zero files instead of every file.
+export function noteInFolder(path: string, folder: string): boolean {
+	return folder ? path.startsWith(folder + '/') : true;
+}
+
 // Frontmatter tags can arrive as a scalar, an array, or non-strings
 // (YAML parses a "#1111" hashtag saved without quotes as the int 1111).
 export function normalizeTags(tags: unknown): string[] {
@@ -226,7 +234,10 @@ export function buildDataviewQuery(template: string, folder: string, hashtagFilt
 	const query = [
 		'```dataview',
 		template,
-		`FROM "${folder}"`,
+		// An empty folder means vault root; omitting FROM is Dataview's own
+		// syntax for "search the whole vault", rather than relying on an
+		// empty-string path prefix to match everything.
+		...(folder ? [`FROM "${folder}"`] : []),
 		`WHERE ${clauses.join(' AND ')}`,
 		'```'
 	].join('\n');
