@@ -11,6 +11,7 @@ import {
 	extractSectionBody,
 	hasTag,
 	matchesStatusFilters,
+	noteInFolder,
 	normalizeTags,
 	pruneStaleSessions,
 	sortQueue,
@@ -2075,7 +2076,7 @@ export default class TikTokerPlugin extends Plugin {
 	private async getUntranscribedTikTokNotes(recentDays?: number): Promise<TFile[]> {
 		const tiktokFolder = this.settings.outputFolder;
 		const allFiles = this.app.vault.getMarkdownFiles()
-			.filter(file => file.path.startsWith(tiktokFolder + '/'));
+			.filter(file => noteInFolder(file.path, tiktokFolder));
 
 		const untranscribed: TFile[] = [];
 		const cutoffTime = recentDays ? Date.now() - (recentDays * 24 * 60 * 60 * 1000) : 0;
@@ -4307,11 +4308,11 @@ class TikTokReviewView extends ItemView {
 	}
 
 	async loadQueue() {
-		const tiktokFolder = this.plugin.settings.outputFolder || 'Tiktoks';
+		const tiktokFolder = this.plugin.settings.outputFolder;
 
-		// Get all files in the TikTok folder
+		// Get all files in the TikTok folder (a blank outputFolder means vault root)
 		const allFiles = this.app.vault.getMarkdownFiles()
-			.filter(file => file.path.startsWith(tiktokFolder + '/'));
+			.filter(file => noteInFolder(file.path, tiktokFolder));
 
 		// Combined filter logic (OR between status filters, starred ANDs)
 		this.queue = allFiles.filter(file => {
@@ -5007,8 +5008,9 @@ class TikTokReviewView extends ItemView {
 			return;
 		}
 
-		// Build dataview query based on active filters
-		const outputFolder = this.plugin.settings.outputFolder || 'Tiktoks';
+		// Build dataview query based on active filters (a blank outputFolder means
+		// vault root; Dataview's own `FROM ""` already matches every file)
+		const outputFolder = this.plugin.settings.outputFolder;
 		const result = buildDataviewQuery(
 			this.plugin.settings.reviewQueueDataviewTemplate,
 			outputFolder,
