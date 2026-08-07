@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 import argparse, os, re, subprocess, sys, shutil, hashlib, time, tempfile, signal
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 from pathlib import Path
 
 # =============== Helpers ===============
@@ -246,7 +249,8 @@ def process_one(md_path: Path, args, idx: int, total: int):
 
         print(f"[{idx}/{total}] {name} — transcribing ({args.model}, {args.compute_type}) …")
         tr_start = time.perf_counter()
-        ok = transcribe_streaming(py, local_wav, model_dir, local_txt, args.model, args.lang, args.compute_type)
+        lang = None if args.lang == "auto" else args.lang
+        ok = transcribe_streaming(py, local_wav, model_dir, local_txt, args.model, lang, args.compute_type)
         t_tr = time.perf_counter() - tr_start
         if not ok:
             print(f"[{idx}/{total}] {name} — transcription failed")
@@ -293,7 +297,7 @@ def main():
     p.add_argument("--venv-dir", default=str(script_dir / ".tiktok2text-venv"))
     p.add_argument("--model-dir", default=str(script_dir / ".models"))
     p.add_argument("--model", default="base", help="tiny|base|small|medium|large")
-    p.add_argument("--lang", default="en")
+    p.add_argument("--lang", default="auto", help="Language code (e.g., en, es, fr) or 'auto' for detection")
     p.add_argument("--compute-type", default="int8", help="int8|float16|auto")
 
     args = p.parse_args()
